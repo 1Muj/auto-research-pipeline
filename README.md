@@ -10,6 +10,13 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
+Or one-step (same as above + CLI check):
+
+```bash
+chmod +x one_click.sh scripts/*.sh
+./one_click.sh local
+```
+
 ## Run your own experiment
 
 Create a YAML under `experiments/` (template: `experiments/README.md`), then run:

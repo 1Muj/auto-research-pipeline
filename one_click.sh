@@ -6,8 +6,8 @@ cd "${ROOT}"
 
 usage() {
   echo "Usage: $0 {local|vast}"
-  echo "  local  — venv + 依赖 + 示例实验（适合本机 / Claude Code）"
-  echo "  vast   — 调用 vastai 搜索并创建实例（需 pip install vastai 与 API key）"
+  echo "  local — venv + install + verify CLI (add your own experiments/*.yaml on main)"
+  echo "  vast  — Vast.ai search/create instance (needs: pip install vastai + API key)"
 }
 
 case "${1:-}" in

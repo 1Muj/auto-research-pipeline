@@ -4,7 +4,7 @@
 
 ## 常用命令
 
-- 本地一键环境 + 试跑：`bash scripts/claude_code_bootstrap.sh`
+- 本地一键环境（无内置实验）：`bash scripts/claude_code_bootstrap.sh`，再自行添加 YAML 后 `auto-research run ...`
 - 跑单个实验：`auto-research run --cwd . -e experiments/your_experiment.yaml`
 - 跑 `experiments/` 下全部 YAML：`auto-research run --cwd .`
 
