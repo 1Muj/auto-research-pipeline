@@ -35,3 +35,16 @@ auto-research run --cwd . -e experiments/example.yaml
 ## Claude Code
 
 仓库根目录 `CLAUDE.md` 供 Claude Code 阅读；本地开发路径与 `scripts/claude_code_bootstrap.sh` 一致即可。
+
+## 发布到 GitHub（账号 [@1Muj](https://github.com/1Muj)）
+
+1. 打开 [New repository](https://github.com/new)，Repository name 例如 **`auto-research-pipeline`**，选 **Public**，**不要**勾选 “Add a README”（本地已有）。
+2. 在本机项目根目录执行（把 `YOUR_TOKEN` 换成你的 [Personal Access Token](https://github.com/settings/tokens) 若用 HTTPS，或改用 SSH 地址）：
+
+```bash
+git remote add origin https://github.com/1Muj/auto-research-pipeline.git
+git branch -M main
+git push -u origin main
+```
+
+若 GitHub 上用了别的仓库名，把上面 URL 里的 `auto-research-pipeline` 改成你的仓库名即可。
