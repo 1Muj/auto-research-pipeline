@@ -1,0 +1,16 @@
+name: linear_regression_gd
+description: "Real toy experiment: fit y = a*x + b with gradient descent; writes metrics.json"
+command:
+  - python
+  - scripts/train_linear_regression.py
+  - --epochs
+  - "400"
+  - --lr
+  - "0.05"
+  - --metrics-path
+  - metrics.json
+metrics_path: metrics.json
+success_threshold:
+  loss: 0.10
+  r2: 0.90
+
