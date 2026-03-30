@@ -2,7 +2,16 @@
 
 本分支 `exp` 只保留一个**可直接运行的真实小实验**：一维线性回归 \(y=ax+b\)（梯度下降），用于演示最小可用的 research pipeline（YAML → 执行 → `metrics.json` → 阈值反馈）。
 
-## 运行
+## 一键运行
+
+```bash
+chmod +x one_click.sh scripts/*.sh
+./one_click.sh local
+```
+
+（Vast.ai：`./one_click.sh vast`）
+
+## 手动运行
 
 ```bash
 python3 -m venv .venv
