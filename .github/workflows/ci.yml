@@ -38,4 +38,4 @@ jobs:
       - name: CLI smoke
         run: |
           pip install -e .
-          auto-research run --cwd . -e experiments/example.yaml
+          auto-research --help

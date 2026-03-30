@@ -5,7 +5,7 @@
 ## 常用命令
 
 - 本地一键环境 + 试跑：`bash scripts/claude_code_bootstrap.sh`
-- 跑单个实验：`auto-research run --cwd . -e experiments/example.yaml`
+- 跑单个实验：`auto-research run --cwd . -e experiments/your_experiment.yaml`
 - 跑 `experiments/` 下全部 YAML：`auto-research run --cwd .`
 
 ## 写新实验
@@ -14,7 +14,7 @@
 
 ## CI / GPU
 
-- Push 触发 `.github/workflows/ci.yml`（lint + 测试 + 示例实验）。
+- Push 触发 `.github/workflows/ci.yml`（lint + 测试）。
 - 在 Vast GPU 机器上注册 self-hosted runner（标签 `self-hosted`, `gpu`）后，可手动触发 `GPU Research` workflow。
 
-修改流水线行为时优先改 `src/auto_research/`，并保持 `tests/` 与示例 YAML 可通过 CI。
+修改流水线行为时优先改 `src/auto_research/`，并保持 `tests/` 可通过 CI。

@@ -1,21 +1,20 @@
-# Auto Research Pipeline
+# Auto Research Pipeline (core)
 
-Python 流水线：实验（YAML）→ 执行 → `metrics.json` → 阈值反馈 → 可选 Claude 文字总结。CI 跑在 GitHub Actions；GPU 任务通过 **self-hosted runner**（例如 Vast.ai 上的 RTX 5080 机器）执行。
-
-## 一键脚本
-
-```bash
-chmod +x one_click.sh scripts/*.sh
-./one_click.sh local   # 本机：venv + 示例实验（Claude Code 可直接用此仓库）
-./one_click.sh vast    # Vast：搜索 GPU 并创建实例（需 vastai CLI）
-```
+本分支只保留 **核心 pipeline 代码**，不附带示例实验。教授/使用者可以自行在 `experiments/` 下添加 `*.yaml` 实验并运行。
 
 ## 安装
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-auto-research run --cwd . -e experiments/example.yaml
+```
+
+## 运行你自己的实验
+
+在 `experiments/` 新增 YAML（模板见 `experiments/README.md`），然后：
+
+```bash
+auto-research run --cwd . -e experiments/your_experiment.yaml
 ```
 
 可选 LLM 反馈：`pip install -e ".[anthropic]"`，并设置 `ANTHROPIC_API_KEY`。
@@ -29,8 +28,8 @@ auto-research run --cwd . -e experiments/example.yaml
 
 ## GitHub Actions
 
-- **CI**：推送即跑 lint、pytest、示例实验。
-- **GPU Research**：`workflow_dispatch`，需带标签 `self-hosted` + `gpu` 的 runner；可上传 `experiments/runs` 与 `experiments/feedback` 为 artifact。
+- **CI**：推送即跑 lint、pytest（核心代码质量保证）。
+- **GPU Research**：`workflow_dispatch`，需带标签 `self-hosted` + `gpu` 的 runner；运行时请把输入 `experiment` 指向你自己添加的 YAML。
 
 ## Claude Code
 

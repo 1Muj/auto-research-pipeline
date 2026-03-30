@@ -9,7 +9,7 @@ on:
       experiment:
         description: "Experiment YAML path relative to repo root"
         required: false
-        default: "experiments/example.yaml"
+        default: "experiments/your_experiment.yaml"
 
 jobs:
   research:
