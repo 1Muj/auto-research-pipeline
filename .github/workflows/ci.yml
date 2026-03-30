@@ -1,3 +1,4 @@
+# CI for exp (and main if merged): install package and run the bundled linear regression experiment.
 name: CI
 
 on:

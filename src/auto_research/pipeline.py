@@ -1,3 +1,5 @@
+"""High-level API: load YAML, run experiment, evaluate thresholds, optional LLM note."""
+
 from __future__ import annotations
 
 import json
@@ -10,6 +12,8 @@ from auto_research.feedback import maybe_llm_feedback, write_feedback
 
 
 class ResearchPipeline:
+    """Orchestrates one or many experiment YAML files under experiments/."""
+
     def __init__(self, base: Path | None = None) -> None:
         self.cfg = PipelineConfig().resolved(base)
 
@@ -32,6 +36,7 @@ class ResearchPipeline:
         return report
 
     def run_all(self, pattern: str = "*.yaml") -> list[dict[str, Any]]:
+        """Run every matching YAML in experiments_dir (skip names starting with _)."""
         self.cfg.experiments_dir.mkdir(parents=True, exist_ok=True)
         results: list[dict[str, Any]] = []
         for path in sorted(self.cfg.experiments_dir.glob(pattern)):

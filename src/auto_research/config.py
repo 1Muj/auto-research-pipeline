@@ -1,3 +1,5 @@
+"""Experiment schema (YAML) and on-disk layout paths for runs and feedback."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -18,6 +20,8 @@ class ExperimentSpec(BaseModel):
 
 
 class PipelineConfig(BaseModel):
+    """Paths relative to project root; use resolved() for absolute paths."""
+
     root: Path = Field(default_factory=lambda: Path.cwd())
     experiments_dir: Path = Field(default_factory=lambda: Path("experiments"))
     runs_dir: Path = Field(default_factory=lambda: Path("experiments/runs"))
@@ -34,6 +38,7 @@ class PipelineConfig(BaseModel):
 
 
 def load_experiment_yaml(path: Path) -> ExperimentSpec:
+    """Parse a single experiment YAML file into a validated ExperimentSpec."""
     import yaml
 
     data: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8"))

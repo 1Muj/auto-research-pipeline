@@ -1,3 +1,4 @@
+# Example experiment: train script writes metrics.json; pipeline copies it under experiments/runs/<id>/.
 name: linear_regression_gd
 description: "Real toy experiment: fit y = a*x + b with gradient descent; writes metrics.json"
 command:

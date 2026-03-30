@@ -1,3 +1,5 @@
+"""Threshold checks against metrics and optional LLM-written summaries."""
+
 from __future__ import annotations
 
 import json
@@ -9,6 +11,7 @@ from auto_research.config import ExperimentSpec, PipelineConfig
 
 
 def _minimize_metric(name: str) -> bool:
+    """Heuristic: loss-like metrics should go down; others should go up."""
     n = name.lower()
     return "loss" in n or "error" in n or n.startswith("perplexity")
 
@@ -53,6 +56,7 @@ def write_feedback(
     run_summary: dict[str, Any],
     metrics: dict[str, Any],
 ) -> Path:
+    """Write one JSON file per run under experiments/feedback/."""
     cfg.feedback_dir.mkdir(parents=True, exist_ok=True)
     passed, detail = evaluate_thresholds(metrics, spec.success_threshold)
     body: dict[str, Any] = {

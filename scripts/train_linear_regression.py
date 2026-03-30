@@ -15,6 +15,7 @@ from pathlib import Path
 
 
 def generate_data(n: int, seed: int) -> tuple[list[float], list[float]]:
+    """Synthetic linear data: y = 2*x + 1 + Gaussian noise."""
     rng = random.Random(seed)
     xs: list[float] = []
     ys: list[float] = []
@@ -28,6 +29,7 @@ def generate_data(n: int, seed: int) -> tuple[list[float], list[float]]:
 
 
 def mse(y_true: list[float], y_pred: list[float]) -> float:
+    """Mean squared error used as loss in metrics.json."""
     s = 0.0
     for yt, yp in zip(y_true, y_pred, strict=True):
         d = yt - yp
@@ -36,6 +38,7 @@ def mse(y_true: list[float], y_pred: list[float]) -> float:
 
 
 def r2_score(y_true: list[float], y_pred: list[float]) -> float:
+    """Coefficient of determination (higher is better)."""
     mean = sum(y_true) / max(1, len(y_true))
     ss_tot = sum((yt - mean) ** 2 for yt in y_true)
     ss_res = sum((yt - yp) ** 2 for yt, yp in zip(y_true, y_pred, strict=True))
@@ -60,6 +63,7 @@ def main() -> None:
     n = float(len(xs))
 
     for _ in range(args.epochs):
+        # Batch gradient descent on MSE for linear model y_hat = a*x + b.
         da = 0.0
         db = 0.0
         for x, y in zip(xs, ys, strict=True):

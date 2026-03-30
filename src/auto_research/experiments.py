@@ -1,3 +1,5 @@
+"""Run experiment subprocesses and persist manifests, metrics snapshots, and summaries."""
+
 from __future__ import annotations
 
 import json
@@ -20,11 +22,12 @@ def run_experiment(
     cfg: PipelineConfig,
     run_id: str | None = None,
 ) -> dict[str, Any]:
-    """Execute experiment command, capture env, write run manifest and metrics."""
+    """Run spec.command from cfg.root; copy metrics from metrics_path into the run folder."""
     rid = run_id or f"{spec.name}_{uuid.uuid4().hex[:8]}"
     run_dir = cfg.runs_dir / rid
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    # Merge process env with optional experiment-specific env vars from YAML.
     env = {**os.environ, **spec.env}
     manifest: dict[str, Any] = {
         "run_id": rid,
@@ -50,11 +53,13 @@ def run_experiment(
         manifest["finished_at"] = _utc_now()
         manifest["exit_code"] = proc.returncode
         manifest["duration_sec"] = round(elapsed, 4)
+        # Truncate logs so manifests stay small in CI and local runs.
         manifest["stdout_tail"] = (proc.stdout or "")[-8000:]
         manifest["stderr_tail"] = (proc.stderr or "")[-8000:]
         (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         status = "ok" if proc.returncode == 0 else "failed"
 
+        # Training script should write JSON here (repo root by default).
         metrics_path = cfg.root / spec.metrics_path
         if metrics_path.is_file():
             metrics = json.loads(metrics_path.read_text(encoding="utf-8"))

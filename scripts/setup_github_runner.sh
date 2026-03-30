@@ -25,6 +25,7 @@ case "$(uname -m)" in
   aarch64|arm64) ARCH="arm64" ;;
 esac
 
+# Download official GitHub Actions runner binary for this CPU architecture.
 TARBALL="actions-runner-linux-${ARCH}-${RUNNER_VERSION}.tar.gz"
 if [[ ! -f "${TARBALL}" ]]; then
   curl -fsSL -o "${TARBALL}" \

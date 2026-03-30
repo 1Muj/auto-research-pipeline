@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# 一键入口：本地（Claude Code / venv）或 Vast.ai 搜索建实例
+# One-click entry: local bootstrap (Claude Code / dev) or Vast.ai instance creation.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "${ROOT}"
 
 usage() {
   echo "Usage: $0 {local|vast}"
-  echo "  local  — venv + 依赖 + 运行线性回归实验（适合本机 / Claude Code）"
-  echo "  vast   — 调用 vastai 搜索并创建实例（需 pip install vastai 与 API key）"
+  echo "  local — create .venv, install deps, run linear regression experiment"
+  echo "  vast  — search/create Vast instance (needs: pip install vastai + API key)"
 }
 
 case "${1:-}" in
