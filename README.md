@@ -20,7 +20,7 @@ pip install -e .
 auto-research run --cwd . -e experiments/linear_regression.yaml
 ```
 
-## 你会得到什么
+## 结果
 
 - `experiments/runs/<run_id>/`: `manifest.json` + `metrics.json` + `summary.json`
 - `experiments/feedback/<run_id>_feedback.json`: 阈值通过/失败的反馈
