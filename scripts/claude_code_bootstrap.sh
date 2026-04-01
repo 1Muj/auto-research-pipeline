@@ -9,8 +9,8 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip
 pip install -e ".[dev]"
-# macOS + Python 3.14: editable .pth may be UF_HIDDEN and ignored by site.py
-bash "${ROOT}/scripts/unhide_venv_pth_darwin.sh"
+# Python 3.14 + macOS: pip editable .pth may be UF_HIDDEN; always add src via auto_research_src.pth
+bash "${ROOT}/scripts/ensure_auto_research_on_path.sh"
 
 export PYTHONPATH="${ROOT}/src:${PYTHONPATH:-}"
 auto-research version
