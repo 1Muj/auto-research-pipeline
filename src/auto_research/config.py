@@ -15,6 +15,11 @@ class ExperimentSpec(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     metrics_path: str = "metrics.json"
     success_threshold: dict[str, float] = Field(default_factory=dict)
+    # Optional governance fields (inspired by structured research / eng workflows)
+    hypothesis: str = ""
+    assumptions: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    governance_phase: str = ""
 
 
 class PipelineConfig(BaseModel):

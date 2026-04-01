@@ -6,7 +6,10 @@ from pathlib import Path
 import typer
 
 from auto_research import __version__
+from auto_research.config import PipelineConfig
 from auto_research.pipeline import ResearchPipeline
+from auto_research.preflight import preflight_experiment
+from auto_research.retro import retro_markdown
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
@@ -29,6 +32,37 @@ def run_cmd(
     else:
         reports = pipe.run_all()
         typer.echo(_json({"runs": len(reports), "reports": reports}))
+
+
+@app.command("preflight")
+def preflight_cmd(
+    experiment: Path = typer.Option(
+        ...,
+        "--experiment",
+        "-e",
+        help="Experiment YAML to validate before run",
+    ),
+    cwd: Path | None = typer.Option(None, "--cwd", help="Project root"),
+) -> None:
+    """Validate experiment YAML and metrics contract (governance gate)."""
+    errs, warns = preflight_experiment(experiment, cwd)
+    for w in warns:
+        typer.echo(typer.style(w, fg=typer.colors.YELLOW))
+    for e in errs:
+        typer.echo(typer.style(e, fg=typer.colors.RED))
+    if errs:
+        raise typer.Exit(code=1)
+    typer.echo(typer.style("preflight: ok", fg=typer.colors.GREEN))
+
+
+@app.command("retro")
+def retro_cmd(
+    last: int = typer.Option(10, "--last", "-n", help="Number of recent feedback files"),
+    cwd: Path | None = typer.Option(None, "--cwd", help="Project root"),
+) -> None:
+    """Print a markdown retro from recent experiments/feedback/*.json."""
+    cfg = PipelineConfig().resolved(cwd)
+    typer.echo(retro_markdown(cfg, last))
 
 
 @app.command("version")

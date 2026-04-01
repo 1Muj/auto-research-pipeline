@@ -12,6 +12,13 @@
 
 在 `experiments/` 新增 `*.yaml`：`name`、`command`、可选 `success_threshold`（指标名含 `loss`/`error` 视为越小越好，否则越大越好）。训练脚本需在仓库根目录写出 `metrics.json`（或通过 `metrics_path` 指定路径）。
 
+## 治理 / 虚拟「角色」流程（对标 gstack 思路）
+
+- 文档：`docs/RESEARCH_GOVERNANCE.md`
+- Claude Code 命令说明：`.claude/commands/research-*.md`（office-hours、plan、review、retro）
+- CLI：`auto-research preflight -e ...`、`auto-research retro --last N`
+- 可选 YAML 字段：`hypothesis`、`assumptions`、`risks`、`governance_phase`（写入 run 的 `manifest.json`）
+
 ## CI / GPU
 
 - Push 触发 `.github/workflows/ci.yml`（lint + 测试）。

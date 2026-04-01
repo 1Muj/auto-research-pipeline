@@ -11,6 +11,16 @@ from typing import Any
 from auto_research.config import ExperimentSpec, PipelineConfig
 
 
+def _governance_block(spec: ExperimentSpec) -> dict[str, Any]:
+    return {
+        "hypothesis": spec.hypothesis,
+        "assumptions": spec.assumptions,
+        "risks": spec.risks,
+        "governance_phase": spec.governance_phase,
+        "description": spec.description,
+    }
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -32,6 +42,7 @@ def run_experiment(
         "started_at": _utc_now(),
         "command": spec.command,
         "cwd": str(cfg.root),
+        "governance": _governance_block(spec),
     }
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 

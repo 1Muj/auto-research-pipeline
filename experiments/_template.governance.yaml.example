@@ -1,0 +1,16 @@
+# Copy to experiments/<name>.yaml (without leading _) to run.
+# Files starting with _ are skipped by `auto-research run` (no extension pattern on name — only glob *.yaml in dir skips _ prefix on filename).
+# This file is named with _ so it is skipped by batch runs but valid for `preflight` / manual -e.
+
+name: template_governance
+description: Example optional governance fields (hypothesis / assumptions / risks / phase)
+hypothesis: "Replace with the single sentence your experiment tests."
+assumptions:
+  - "Replace with explicit premises (data, environment, reproducibility)."
+risks:
+  - "Replace with failure modes (OOM, wrong metric, flaky data)."
+governance_phase: plan
+command: []
+env: {}
+metrics_path: metrics.json
+success_threshold: {}

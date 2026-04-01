@@ -39,3 +39,4 @@ jobs:
         run: |
           pip install -e .
           auto-research --help
+          auto-research preflight -e experiments/_template.governance.yaml.example

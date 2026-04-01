@@ -27,6 +27,15 @@ auto-research run --cwd . -e experiments/your_experiment.yaml
 
 Optional LLM feedback: `pip install -e ".[anthropic]"` and set `ANTHROPIC_API_KEY`.
 
+## Governance (gstack-style workflow, optional)
+
+Structured research gates and Claude “roles” without copying external products:
+
+- **Doc**: `docs/RESEARCH_GOVERNANCE.md`
+- **Claude Code prompts**: `.claude/commands/research-*.md`
+- **CLI**: `auto-research preflight -e experiments/your_experiment.yaml` then `auto-research run ...`; `auto-research retro --last 10`
+- **YAML**: optional `hypothesis`, `assumptions`, `risks`, `governance_phase` (stored under `manifest.json` → `governance`)
+
 ## Vast.ai RTX 5080
 
 1. `pip install vastai && vastai set api-key YOUR_KEY`
