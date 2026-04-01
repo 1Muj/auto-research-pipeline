@@ -19,7 +19,14 @@ chmod +x one_click.sh scripts/*.sh
 
 ## Run your own experiment
 
-Create a YAML under `experiments/` (template: `experiments/README.md`), then run:
+Bundled **smoke demo** (same as CI): `experiments/demo_smoke.yaml`
+
+```bash
+auto-research preflight -e experiments/demo_smoke.yaml
+auto-research run --cwd . -e experiments/demo_smoke.yaml
+```
+
+Create more YAMLs under `experiments/` (template: `experiments/README.md`), then run:
 
 ```bash
 auto-research run --cwd . -e experiments/your_experiment.yaml

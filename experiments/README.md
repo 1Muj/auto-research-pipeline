@@ -1,5 +1,19 @@
 # Experiments
 
+## 一键演示（CI 与本机）
+
+仓库自带 **`demo_smoke.yaml`**：内联 Python 写入 `metrics.json`，用于验证整条流水线（与 GitHub Actions 中步骤一致）。
+
+```bash
+auto-research preflight -e experiments/demo_smoke.yaml
+auto-research run --cwd . -e experiments/demo_smoke.yaml
+auto-research retro --last 5
+```
+
+注意：`auto-research run`（不带 `-e`）会跑 `experiments/` 下**所有** `*.yaml`，因此会**同时**跑 `demo_smoke` 和你的实验；开发时多用 `-e` 指定单个文件。
+
+---
+
 在 `experiments/` 下新增你的 `*.yaml` 实验定义，然后运行：
 
 ```bash

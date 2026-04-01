@@ -35,8 +35,10 @@ jobs:
         env:
           PYTHONPATH: src
 
-      - name: CLI smoke
+      - name: CLI smoke + preflight + end-to-end demo
         run: |
           pip install -e .
           auto-research --help
           auto-research preflight -e experiments/_template.governance.yaml.example
+          auto-research preflight -e experiments/demo_smoke.yaml
+          auto-research run --cwd . -e experiments/demo_smoke.yaml

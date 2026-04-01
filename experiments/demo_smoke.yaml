@@ -1,0 +1,19 @@
+# Bundled smoke experiment for CI and local one-command demo (no external scripts).
+name: demo_smoke
+description: Writes metrics.json via inline Python — proves pipeline end-to-end.
+hypothesis: "Pipeline executes command, persists metrics, and threshold feedback passes."
+governance_phase: build
+command:
+  - python
+  - -c
+  - |
+    import json
+    from pathlib import Path
+    Path("metrics.json").write_text(
+        json.dumps({"loss": 0.08, "accuracy": 0.95}, indent=2),
+        encoding="utf-8",
+    )
+metrics_path: metrics.json
+success_threshold:
+  loss: 0.10
+  accuracy: 0.90
