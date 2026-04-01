@@ -16,7 +16,7 @@
 
 - 文档：`docs/RESEARCH_GOVERNANCE.md`
 - Claude Code 命令说明：`.claude/commands/research-*.md`（office-hours、plan、review、retro）
-- CLI：`auto-research cycle --cwd . -e experiments/<file>.yaml`（preflight+run+retro 一步）、或分步 `preflight` / `run` / `retro`
+- CLI：`auto-research cycle --cwd .`（全部 `experiments/*.yaml` 顺序跑 + 末尾 retro）、或 `cycle -e experiments/<file>.yaml` 只跑一个；也可分步 `preflight` / `run` / `retro`
 - 可选 YAML 字段：`hypothesis`、`assumptions`、`risks`、`governance_phase`（写入 run 的 `manifest.json`）
 
 ## CI / GPU

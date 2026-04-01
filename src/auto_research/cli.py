@@ -34,6 +34,25 @@ def run_cmd(
         typer.echo(_json({"runs": len(reports), "reports": reports}))
 
 
+def _preflight_or_exit(experiment: Path, cwd: Path | None) -> None:
+    errs, warns = preflight_experiment(experiment, cwd)
+    for w in warns:
+        typer.echo(typer.style(w, fg=typer.colors.YELLOW))
+    for e in errs:
+        typer.echo(typer.style(e, fg=typer.colors.RED))
+    if errs:
+        raise typer.Exit(code=1)
+    typer.echo(typer.style("preflight: ok", fg=typer.colors.GREEN))
+
+
+def _cycle_experiment_files(cfg: PipelineConfig) -> list[Path]:
+    """Same selection as run_all: experiments/*.yaml, skip _*.yaml."""
+    d = cfg.experiments_dir
+    if not d.is_dir():
+        return []
+    return sorted(p for p in d.glob("*.yaml") if not p.name.startswith("_"))
+
+
 @app.command("preflight")
 def preflight_cmd(
     experiment: Path = typer.Option(
@@ -45,43 +64,47 @@ def preflight_cmd(
     cwd: Path | None = typer.Option(None, "--cwd", help="Project root"),
 ) -> None:
     """Validate experiment YAML and metrics contract (governance gate)."""
-    errs, warns = preflight_experiment(experiment, cwd)
-    for w in warns:
-        typer.echo(typer.style(w, fg=typer.colors.YELLOW))
-    for e in errs:
-        typer.echo(typer.style(e, fg=typer.colors.RED))
-    if errs:
-        raise typer.Exit(code=1)
-    typer.echo(typer.style("preflight: ok", fg=typer.colors.GREEN))
+    _preflight_or_exit(experiment, cwd)
 
 
 @app.command("cycle")
 def cycle_cmd(
-    experiment: Path = typer.Option(
-        ...,
+    experiment: Path | None = typer.Option(
+        None,
         "--experiment",
         "-e",
-        help="Experiment YAML: preflight → run → retro in one shot",
+        help="One YAML; omit to run all experiments/*.yaml (excluding _*.yaml), in sorted order",
     ),
     cwd: Path | None = typer.Option(None, "--cwd", help="Project root"),
     last: int = typer.Option(10, "--last", "-n", help="Retro: recent feedback files to include"),
 ) -> None:
-    """Run preflight, then run one experiment, then print retro (CLI automation in one command)."""
-    errs, warns = preflight_experiment(experiment, cwd)
-    for w in warns:
-        typer.echo(typer.style(w, fg=typer.colors.YELLOW))
-    for e in errs:
-        typer.echo(typer.style(e, fg=typer.colors.RED))
-    if errs:
-        raise typer.Exit(code=1)
-    typer.echo(typer.style("preflight: ok", fg=typer.colors.GREEN))
+    """Preflight → run for one or all experiment YAMLs, then print retro once at the end."""
+    cfg = PipelineConfig().resolved(cwd)
+    if experiment is not None:
+        paths = [experiment]
+    else:
+        paths = _cycle_experiment_files(cfg)
+        if not paths:
+            typer.echo(
+                typer.style(
+                    f"No experiments to cycle under {cfg.experiments_dir} "
+                    "(need *.yaml, excluding _*.yaml).",
+                    fg=typer.colors.RED,
+                )
+            )
+            raise typer.Exit(code=1)
 
     pipe = ResearchPipeline(base=cwd)
-    report = pipe.run_one(experiment)
-    typer.echo(typer.style(_json(report), fg=typer.colors.GREEN))
-    typer.echo("")
+    for i, path in enumerate(paths):
+        if len(paths) > 1:
+            msg = f"=== cycle {i + 1}/{len(paths)}: {path} ==="
+            typer.echo(typer.style(msg, fg=typer.colors.BLUE))
+        _preflight_or_exit(path, cwd)
+        report = pipe.run_one(path)
+        typer.echo(typer.style(_json(report), fg=typer.colors.GREEN))
+        typer.echo("")
+
     typer.echo(typer.style("--- retro ---", fg=typer.colors.CYAN))
-    cfg = PipelineConfig().resolved(cwd)
     typer.echo(retro_markdown(cfg, last))
 
 

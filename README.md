@@ -31,6 +31,12 @@ Bundled **smoke demo** (same as CI): `experiments/demo_smoke.yaml`
 auto-research cycle --cwd . -e experiments/demo_smoke.yaml --last 5
 ```
 
+All `experiments/*.yaml` in sorted order (skips `_*.yaml`, same as `run` without `-e`):
+
+```bash
+auto-research cycle --cwd . --last 10
+```
+
 Or step by step:
 
 ```bash

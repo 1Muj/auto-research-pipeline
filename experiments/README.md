@@ -10,6 +10,12 @@
 auto-research cycle --cwd . -e experiments/demo_smoke.yaml --last 5
 ```
 
+**跑完目录里所有实验**（`experiments/*.yaml` 按文件名排序，跳过 `_` 开头的模板）：
+
+```bash
+auto-research cycle --cwd . --last 10
+```
+
 分步：
 
 ```bash
