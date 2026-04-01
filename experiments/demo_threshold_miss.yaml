@@ -1,0 +1,22 @@
+# 故意阈值未过：用于演示 feedback 里 thresholds_passed=false 与 retro 汇总。
+name: demo_threshold_miss
+description: Writes poor loss on purpose — expect thresholds_passed=False in feedback.
+hypothesis: "Demonstrates negative threshold outcome without failing the subprocess."
+governance_phase: review
+command:
+  - python
+  - -c
+  - |
+    import json
+    from pathlib import Path
+    Path("metrics.json").write_text(
+        json.dumps(
+            {"loss": 0.88, "accuracy": 0.42},
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+metrics_path: metrics.json
+success_threshold:
+  loss: 0.25
+  accuracy: 0.90

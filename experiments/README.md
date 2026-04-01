@@ -2,7 +2,17 @@
 
 ## 一键演示（CI 与本机）
 
-仓库自带 **`demo_smoke.yaml`**：内联 Python 写入 `metrics.json`，用于验证整条流水线（与 GitHub Actions 中步骤一致）。
+仓库自带若干 **`demo_*.yaml`**（内联 Python 写 `metrics.json`，无外部数据依赖）：
+
+| 文件 | 说明 |
+|------|------|
+| `demo_smoke.yaml` | CI 烟测默认用这个；双指标 loss + accuracy |
+| `demo_baseline_linear.yaml` | 回归风格：`val_loss` + `r2` |
+| `demo_ablation_stub.yaml` | 分类风格：`accuracy` + `f1_score`，含治理字段示例 |
+| `demo_threshold_miss.yaml` | **故意不达标**：`feedback` 里 `thresholds_passed=false`，便于讲阈值与 retro |
+| `demo_latency_stub.yaml` | 短暂 `sleep` + 合格指标，便于对比 `duration_sec` |
+
+`auto-research cycle --cwd .` 会按文件名排序依次跑全部 `demo_*.yaml`（仍会跳过 `_*.yaml` 模板）。
 
 **一条命令**（preflight → run → retro）：
 

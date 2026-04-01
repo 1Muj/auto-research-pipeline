@@ -1,0 +1,22 @@
+# 合成「小回归基线」：val_loss + r2，阈值可通过（用于对比 / 多指标演示）。
+name: demo_baseline_linear
+description: Synthetic baseline metrics for a linear-style regression stub.
+hypothesis: "Under toy noise, val_loss stays below gate and r2 clears the floor."
+governance_phase: build
+command:
+  - python
+  - -c
+  - |
+    import json
+    from pathlib import Path
+    Path("metrics.json").write_text(
+        json.dumps(
+            {"val_loss": 0.12, "r2": 0.91, "n_samples": 500},
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+metrics_path: metrics.json
+success_threshold:
+  val_loss: 0.20
+  r2: 0.85

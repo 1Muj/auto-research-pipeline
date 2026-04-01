@@ -1,0 +1,25 @@
+# 合成「消融 / 分类头」式指标：accuracy + f1（无外部数据）。
+name: demo_ablation_stub
+description: Stub classifier-style metrics to show multi-threshold maximize metrics.
+assumptions:
+  - "Metrics are synthetic for pipeline demo only."
+risks:
+  - "Real runs need a real train/eval split and consistent metric definitions."
+governance_phase: build
+command:
+  - python
+  - -c
+  - |
+    import json
+    from pathlib import Path
+    Path("metrics.json").write_text(
+        json.dumps(
+            {"accuracy": 0.887, "f1_score": 0.871, "epoch": 3},
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+metrics_path: metrics.json
+success_threshold:
+  accuracy: 0.85
+  f1_score: 0.80

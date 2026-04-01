@@ -1,0 +1,20 @@
+# 带短暂 sleep：metrics 里仍有合格 loss/accuracy，便于看到 duration_sec 差异。
+name: demo_latency_stub
+description: Short sleep + metrics write — illustrates timing without heavy compute.
+governance_phase: build
+command:
+  - python
+  - -c
+  - |
+    import json
+    import time
+    from pathlib import Path
+    time.sleep(0.15)
+    Path("metrics.json").write_text(
+        json.dumps({"loss": 0.05, "accuracy": 0.97}, indent=2),
+        encoding="utf-8",
+    )
+metrics_path: metrics.json
+success_threshold:
+  loss: 0.10
+  accuracy: 0.95
