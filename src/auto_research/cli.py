@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import typer
 
@@ -26,17 +27,29 @@ def run_cmd(
     pretty: bool = typer.Option(
         False,
         "--pretty",
-        help="Pretty-print JSON (default: one line, easier in narrow terminals)",
+        help="Pretty-print JSON (ignored if --brief)",
+    ),
+    brief: bool = typer.Option(
+        False,
+        "--brief",
+        "-b",
+        help="Short multi-line summary (best for narrow terminals / demos)",
     ),
 ) -> None:
     """Run one experiment file or all experiments under experiments/."""
     pipe = ResearchPipeline(base=cwd)
+    root = pipe.cfg.root
     if experiment:
         report = pipe.run_one(experiment)
-        typer.echo(typer.style(_json(report, pretty=pretty), fg=typer.colors.GREEN))
+        _echo_report(report, root, pretty=pretty, brief=brief)
     else:
         reports = pipe.run_all()
-        typer.echo(_json({"runs": len(reports), "reports": reports}, pretty=pretty))
+        if brief:
+            for report in reports:
+                _echo_report(report, root, pretty=False, brief=True)
+                typer.echo("")
+        else:
+            typer.echo(_json({"runs": len(reports), "reports": reports}, pretty=pretty))
 
 
 def _preflight_or_exit(experiment: Path, cwd: Path | None) -> None:
@@ -85,7 +98,13 @@ def cycle_cmd(
     pretty: bool = typer.Option(
         False,
         "--pretty",
-        help="Pretty-print each run JSON (default: one line per run)",
+        help="Pretty-print each run JSON (ignored if --brief)",
+    ),
+    brief: bool = typer.Option(
+        False,
+        "--brief",
+        "-b",
+        help="Short multi-line summary per run (best for narrow terminals / demos)",
     ),
 ) -> None:
     """Preflight → run for one or all experiment YAMLs, then print retro once at the end."""
@@ -111,7 +130,7 @@ def cycle_cmd(
             typer.echo(typer.style(msg, fg=typer.colors.BLUE))
         _preflight_or_exit(path, cwd)
         report = pipe.run_one(path)
-        typer.echo(typer.style(_json(report, pretty=pretty), fg=typer.colors.GREEN))
+        _echo_report(report, cfg.root, pretty=pretty, brief=brief)
         typer.echo("")
 
     typer.echo(typer.style("--- retro ---", fg=typer.colors.CYAN))
@@ -139,6 +158,49 @@ def _json(obj: object, *, pretty: bool = False) -> str:
     if pretty:
         return json.dumps(obj, indent=2, ensure_ascii=False)
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+
+def _short_path(path_str: str, root: Path) -> str:
+    try:
+        return str(Path(path_str).resolve().relative_to(root.resolve()))
+    except ValueError:
+        return path_str
+
+
+def _report_brief(report: dict[str, Any], root: Path) -> str:
+    summary = report.get("summary") or {}
+    exp = summary.get("experiment", "?")
+    rid = summary.get("run_id", "?")
+    st = summary.get("status", "?")
+    lines = [
+        f"experiment={exp}  run_id={rid}  status={st}",
+    ]
+    fb = report.get("feedback_path")
+    if fb:
+        lines.append(f"feedback: {_short_path(str(fb), root)}")
+    mp = summary.get("metrics_path")
+    if mp:
+        lines.append(f"metrics: {_short_path(str(mp), root)}")
+    metrics = report.get("metrics") or {}
+    parts: list[str] = []
+    for k, v in metrics.items():
+        if k in ("duration_sec", "exit_code"):
+            continue
+        parts.append(f"{k}={v}")
+    if parts:
+        lines.append("values: " + " ".join(str(p) for p in parts))
+    dur = metrics.get("duration_sec")
+    ec = metrics.get("exit_code")
+    if dur is not None or ec is not None:
+        lines.append(f"duration_sec={dur}  exit_code={ec}")
+    return "\n".join(lines)
+
+
+def _echo_report(report: dict[str, Any], root: Path, *, pretty: bool, brief: bool) -> None:
+    if brief:
+        typer.echo(typer.style(_report_brief(report, root), fg=typer.colors.GREEN))
+    else:
+        typer.echo(typer.style(_json(report, pretty=pretty), fg=typer.colors.GREEN))
 
 
 def main() -> None:

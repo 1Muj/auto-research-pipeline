@@ -48,6 +48,41 @@ def test_cycle_minimal_experiment(tmp_path: Path) -> None:
     assert "Experiment retro" in result.output
 
 
+def test_cycle_brief_format(tmp_path: Path) -> None:
+    exp_dir = tmp_path / "experiments"
+    exp_dir.mkdir(parents=True)
+    yaml_path = exp_dir / "tiny.yaml"
+    yaml_path.write_text(
+        textwrap.dedent(
+            """
+            name: tiny_brief
+            command:
+              - python
+              - -c
+              - |
+                import json
+                from pathlib import Path
+                Path("metrics.json").write_text(
+                    json.dumps({"loss": 0.01}, indent=2),
+                    encoding="utf-8",
+                )
+            metrics_path: metrics.json
+            success_threshold:
+              loss: 0.10
+            """
+        ).strip(),
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["cycle", "--cwd", str(tmp_path), "-e", str(yaml_path), "--last", "2", "--brief"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "experiment=tiny_brief" in result.output
+    assert "feedback:" in result.output
+
+
 def test_cycle_all_runs_each_yaml(tmp_path: Path) -> None:
     exp_dir = tmp_path / "experiments"
     exp_dir.mkdir(parents=True)
