@@ -23,15 +23,20 @@ def run_cmd(
         help="Path to experiment YAML (default: run all *.yaml in experiments/)",
     ),
     cwd: Path | None = typer.Option(None, "--cwd", help="Project root"),
+    pretty: bool = typer.Option(
+        False,
+        "--pretty",
+        help="Pretty-print JSON (default: one line, easier in narrow terminals)",
+    ),
 ) -> None:
     """Run one experiment file or all experiments under experiments/."""
     pipe = ResearchPipeline(base=cwd)
     if experiment:
         report = pipe.run_one(experiment)
-        typer.echo(typer.style(_json(report), fg=typer.colors.GREEN))
+        typer.echo(typer.style(_json(report, pretty=pretty), fg=typer.colors.GREEN))
     else:
         reports = pipe.run_all()
-        typer.echo(_json({"runs": len(reports), "reports": reports}))
+        typer.echo(_json({"runs": len(reports), "reports": reports}, pretty=pretty))
 
 
 def _preflight_or_exit(experiment: Path, cwd: Path | None) -> None:
@@ -77,6 +82,11 @@ def cycle_cmd(
     ),
     cwd: Path | None = typer.Option(None, "--cwd", help="Project root"),
     last: int = typer.Option(10, "--last", "-n", help="Retro: recent feedback files to include"),
+    pretty: bool = typer.Option(
+        False,
+        "--pretty",
+        help="Pretty-print each run JSON (default: one line per run)",
+    ),
 ) -> None:
     """Preflight → run for one or all experiment YAMLs, then print retro once at the end."""
     cfg = PipelineConfig().resolved(cwd)
@@ -101,7 +111,7 @@ def cycle_cmd(
             typer.echo(typer.style(msg, fg=typer.colors.BLUE))
         _preflight_or_exit(path, cwd)
         report = pipe.run_one(path)
-        typer.echo(typer.style(_json(report), fg=typer.colors.GREEN))
+        typer.echo(typer.style(_json(report, pretty=pretty), fg=typer.colors.GREEN))
         typer.echo("")
 
     typer.echo(typer.style("--- retro ---", fg=typer.colors.CYAN))
@@ -124,8 +134,11 @@ def version_cmd() -> None:
     typer.echo(__version__)
 
 
-def _json(obj: object) -> str:
-    return json.dumps(obj, indent=2, ensure_ascii=False)
+def _json(obj: object, *, pretty: bool = False) -> str:
+    """JSON for terminal: compact default; pass pretty=True for indent=2."""
+    if pretty:
+        return json.dumps(obj, indent=2, ensure_ascii=False)
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
 
 def main() -> None:
