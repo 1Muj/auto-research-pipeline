@@ -4,6 +4,14 @@
 
 仓库自带 **`demo_smoke.yaml`**：内联 Python 写入 `metrics.json`，用于验证整条流水线（与 GitHub Actions 中步骤一致）。
 
+**一条命令**（preflight → run → retro）：
+
+```bash
+auto-research cycle --cwd . -e experiments/demo_smoke.yaml --last 5
+```
+
+分步：
+
 ```bash
 auto-research preflight -e experiments/demo_smoke.yaml
 auto-research run --cwd . -e experiments/demo_smoke.yaml

@@ -55,6 +55,36 @@ def preflight_cmd(
     typer.echo(typer.style("preflight: ok", fg=typer.colors.GREEN))
 
 
+@app.command("cycle")
+def cycle_cmd(
+    experiment: Path = typer.Option(
+        ...,
+        "--experiment",
+        "-e",
+        help="Experiment YAML: preflight → run → retro in one shot",
+    ),
+    cwd: Path | None = typer.Option(None, "--cwd", help="Project root"),
+    last: int = typer.Option(10, "--last", "-n", help="Retro: recent feedback files to include"),
+) -> None:
+    """Run preflight, then run one experiment, then print retro (CLI automation in one command)."""
+    errs, warns = preflight_experiment(experiment, cwd)
+    for w in warns:
+        typer.echo(typer.style(w, fg=typer.colors.YELLOW))
+    for e in errs:
+        typer.echo(typer.style(e, fg=typer.colors.RED))
+    if errs:
+        raise typer.Exit(code=1)
+    typer.echo(typer.style("preflight: ok", fg=typer.colors.GREEN))
+
+    pipe = ResearchPipeline(base=cwd)
+    report = pipe.run_one(experiment)
+    typer.echo(typer.style(_json(report), fg=typer.colors.GREEN))
+    typer.echo("")
+    typer.echo(typer.style("--- retro ---", fg=typer.colors.CYAN))
+    cfg = PipelineConfig().resolved(cwd)
+    typer.echo(retro_markdown(cfg, last))
+
+
 @app.command("retro")
 def retro_cmd(
     last: int = typer.Option(10, "--last", "-n", help="Number of recent feedback files"),

@@ -25,9 +25,18 @@ chmod +x one_click.sh scripts/*.sh
 
 Bundled **smoke demo** (same as CI): `experiments/demo_smoke.yaml`
 
+**One shot** (preflight → run → retro):
+
+```bash
+auto-research cycle --cwd . -e experiments/demo_smoke.yaml --last 5
+```
+
+Or step by step:
+
 ```bash
 auto-research preflight -e experiments/demo_smoke.yaml
 auto-research run --cwd . -e experiments/demo_smoke.yaml
+auto-research retro --last 5
 ```
 
 Create more YAMLs under `experiments/` (template: `experiments/README.md`), then run:
