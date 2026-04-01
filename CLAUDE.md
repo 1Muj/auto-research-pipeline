@@ -24,4 +24,23 @@
 - Push 触发 `.github/workflows/ci.yml`（lint + 测试）。
 - 在 Vast GPU 机器上注册 self-hosted runner（标签 `self-hosted`, `gpu`）后，可手动触发 `GPU Research` workflow。
 
+## API 与密钥（预留位）
+
+以后有接口时**只填环境变量即可**，不必改代码结构：
+
+| 用途 | 模板文件 | 说明 |
+|------|----------|------|
+| Claude / Anthropic、OpenAI 兼容、Vast、GitHub token | `deploy/api.env.example` | 复制为 `deploy/api.env`（已在 `.gitignore`） |
+| 仅 Vast 旧习惯 | `deploy/vast.env.example` | 可复制为 `deploy/vast.env`，或与上表合并到 `api.env` |
+
+加载到当前 shell：
+
+```bash
+source scripts/load_api_env.sh
+```
+
+- **Anthropic**：`ANTHROPIC_API_KEY` — 与 `pip install -e ".[anthropic]"` + `auto-research run` 里可选 LLM 反馈一致；可选 `ANTHROPIC_BASE_URL`。
+- **Vast**：`VAST_API_KEY`、`VAST_GPU_QUERY` 等 — `scripts/deploy_vast_5080.sh` 若发现 `deploy/api.env` 会自动 `source`；有 `VAST_API_KEY` 时会尝试 `vastai set api-key`。
+- **预留**：`OPENAI_*`、`CUSTOM_INFERENCE_*` — 供后续你自己的调用脚本读取。
+
 修改流水线行为时优先改 `src/auto_research/`，并保持 `tests/` 可通过 CI。

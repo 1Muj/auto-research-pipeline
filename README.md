@@ -53,6 +53,12 @@ auto-research run --cwd . -e experiments/your_experiment.yaml
 
 Optional LLM feedback: `pip install -e ".[anthropic]"` and set `ANTHROPIC_API_KEY`.
 
+## API keys (placeholder for Claude / Vast / future endpoints)
+
+1. Copy `deploy/api.env.example` → `deploy/api.env` (gitignored).
+2. Fill keys when you have them (`ANTHROPIC_API_KEY`, `VAST_API_KEY`, optional `OPENAI_*`, `CUSTOM_INFERENCE_*`).
+3. In a terminal: `source scripts/load_api_env.sh` (or rely on `deploy_vast_5080.sh` / `claude_code_bootstrap.sh` auto-loading `deploy/api.env` when present).
+
 ## Governance (gstack-style workflow, optional)
 
 Structured research gates and Claude “roles” without copying external products:
@@ -64,11 +70,11 @@ Structured research gates and Claude “roles” without copying external produc
 
 ## Vast.ai RTX 5080
 
-1. `pip install vastai && vastai set api-key YOUR_KEY`
-2. `export VAST_GPU_QUERY='gpu_name=RTX_5080 num_gpus=1'` (if unavailable, try `RTX_4090`, etc.)
-3. `./one_click.sh vast`
+1. Put `VAST_API_KEY` (and optional `VAST_GPU_QUERY`, …) in `deploy/api.env` from `deploy/api.env.example`, **or** `pip install vastai && vastai set api-key YOUR_KEY` manually.
+2. `./one_click.sh vast` runs `scripts/deploy_vast_5080.sh`, which auto-`source`s `deploy/api.env` when it exists and runs `vastai set api-key` if `VAST_API_KEY` is set.
+3. Override GPU search if needed: `export VAST_GPU_QUERY='gpu_name=RTX_5080 num_gpus=1'` (if unavailable, try `RTX_4090`, etc.)
 4. SSH into the instance and run `bash scripts/setup_github_runner.sh YOUR_ORG/YOUR_REPO`.
-   Get the runner registration token from Repo → Settings → Actions → Runners and export it as `GITHUB_TOKEN`.
+   Get the runner registration token from Repo → Settings → Actions → Runners and put it in `deploy/api.env` as `GITHUB_TOKEN` or export for one session.
 
 ## GitHub Actions
 
@@ -77,4 +83,4 @@ Structured research gates and Claude “roles” without copying external produc
 
 ## Claude Code
 
-`CLAUDE.md` at repo root is for Claude Code. Local dev entrypoint matches `scripts/claude_code_bootstrap.sh`.
+`CLAUDE.md` at repo root is for Claude Code. Local dev entrypoint matches `scripts/claude_code_bootstrap.sh` (loads `deploy/api.env` when present so future API keys are available in that shell session).

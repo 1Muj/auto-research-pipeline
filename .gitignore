@@ -11,3 +11,7 @@ experiments/runs/
 experiments/feedback/
 metrics.json
 .DS_Store
+
+# Local secrets (copy from deploy/api.env.example)
+deploy/api.env
+deploy/vast.env

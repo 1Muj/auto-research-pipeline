@@ -8,6 +8,7 @@ usage() {
   echo "Usage: $0 {local|vast}"
   echo "  local — venv + install + verify CLI (add your own experiments/*.yaml on main)"
   echo "  vast  — Vast.ai search/create instance (needs: pip install vastai + API key)"
+  echo "Optional: cp deploy/api.env.example deploy/api.env  # put VAST_API_KEY / ANTHROPIC_* for later"
 }
 
 case "${1:-}" in

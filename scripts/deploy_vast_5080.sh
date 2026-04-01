@@ -6,8 +6,18 @@
 #   VAST_GPU_QUERY   default: 'gpu_name=RTX_5080 num_gpus=1'
 #   VAST_IMAGE       default: nvidia/cuda:12.4.1-runtime-ubuntu22.04
 #   VAST_DISK_GB     default: 64
+#
+# Optional: put VAST_* (and VAST_API_KEY) in deploy/api.env — see deploy/api.env.example
 
 set -euo pipefail
+
+_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [[ -f "${_ROOT}/deploy/api.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${_ROOT}/deploy/api.env"
+  set +a
+fi
 
 : "${VAST_GPU_QUERY:=gpu_name=RTX_5080 num_gpus=1}"
 : "${VAST_IMAGE:=nvidia/cuda:12.4.1-runtime-ubuntu22.04}"
@@ -16,6 +26,10 @@ set -euo pipefail
 if ! command -v vastai &>/dev/null; then
   echo "Install CLI: pip install vastai"
   exit 1
+fi
+
+if [[ -n "${VAST_API_KEY:-}" ]]; then
+  vastai set api-key "${VAST_API_KEY}" || true
 fi
 
 if [[ -n "${VAST_OFFER_ID:-}" ]]; then
