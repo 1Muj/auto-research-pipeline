@@ -10,6 +10,8 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 # If `auto-research` fails with ModuleNotFoundError (common on macOS + Python 3.14), run:
 #   source .venv/bin/activate && bash scripts/ensure_auto_research_on_path.sh
+# That reinstalls a small `bin/auto-research` wrapper (PYTHONPATH + `python -m auto_research`).
+# Re-run it after each `pip install -e .` if the CLI breaks again.
 ```
 
 Or one-step (same as above + CLI check):
