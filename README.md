@@ -8,6 +8,8 @@ Instructors/users can add their own `*.yaml` experiments under `experiments/` an
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
+# macOS + Python 3.14: if `auto-research` fails with ModuleNotFoundError, run:
+#   bash scripts/unhide_venv_pth_darwin.sh
 ```
 
 Or one-step (same as above + CLI check):
