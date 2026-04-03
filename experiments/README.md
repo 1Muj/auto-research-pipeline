@@ -11,8 +11,9 @@
 | `demo_ablation_stub.yaml` | 分类风格：`accuracy` + `f1_score`，含治理字段示例 |
 | `demo_threshold_miss.yaml` | **故意不达标**：`feedback` 里 `thresholds_passed=false`，便于讲阈值与 retro |
 | `demo_latency_stub.yaml` | 短暂 `sleep` + 合格指标，便于对比 `duration_sec` |
+| `_demo_mnist_cnn.yaml` | **MNIST + CNN**，默认 **约 10 分钟**（`--max-seconds 600`）；需 `pip install -e ".[demo]"`；`_` 前缀避免被 `cycle` 无 `-e` 批量跑 |
 
-`auto-research cycle --cwd .` 会按文件名排序依次跑全部 `demo_*.yaml`（仍会跳过 `_*.yaml` 模板）。
+`auto-research cycle --cwd .` 会按文件名排序依次跑全部 `*.yaml`（**跳过 `_` 开头**，因此不会误跑 MNIST 长任务）。
 
 **一条命令**（preflight → run → retro）：
 
@@ -25,6 +26,15 @@ auto-research cycle --cwd . -e experiments/demo_smoke.yaml --last 5
 ```bash
 auto-research cycle --cwd . --last 10
 ```
+
+**深度学习长演示（约 10 分钟）**：
+
+```bash
+pip install -e ".[demo]"
+auto-research run --cwd . -e experiments/_demo_mnist_cnn.yaml
+```
+
+试跑可把 yaml 里 `command` 中的 `"600"` 改成 `"60"`。
 
 分步：
 

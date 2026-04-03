@@ -53,6 +53,8 @@ auto-research run --cwd . -e experiments/your_experiment.yaml
 
 Optional LLM feedback: `pip install -e ".[anthropic]"` and set `ANTHROPIC_API_KEY`.
 
+**~10 min MNIST+CNN demo** (PyTorch): `pip install -e ".[demo]"` then `auto-research run --cwd . -e experiments/_demo_mnist_cnn.yaml` (skipped by bulk `cycle` because of `_` prefix).
+
 ## API keys (placeholder for Claude / Vast / future endpoints)
 
 1. Copy `deploy/api.env.example` → `deploy/api.env` (gitignored).

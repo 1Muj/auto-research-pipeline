@@ -18,6 +18,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.4.0"]
 anthropic = ["anthropic>=0.40.0"]
+demo = ["torch>=2.0", "torchvision>=0.15"]
 
 [project.scripts]
 auto-research = "auto_research.cli:app"

@@ -10,6 +10,7 @@ build/
 experiments/runs/
 experiments/feedback/
 metrics.json
+.data/
 .DS_Store
 
 # Local secrets (copy from deploy/api.env.example)

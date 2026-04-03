@@ -1,0 +1,18 @@
+# 深度学习演示：MNIST + CNN，默认约 10 分钟（CPU/GPU 均可）。
+# 文件名以 _ 开头：不会被 `auto-research cycle --cwd .` 批量跑，避免 CI/日常误触超时。
+# 依赖：pip install -e ".[demo]"
+name: demo_mnist_cnn
+description: MNIST convolutional net; wall-clock budget via --max-seconds (~10 min default).
+hypothesis: "A small CNN reaches strong MNIST accuracy within a fixed training budget."
+governance_phase: build
+command:
+  - python
+  - scripts/demos/train_mnist_cnn.py
+  - --max-seconds
+  - "600"
+  - --metrics-path
+  - metrics.json
+metrics_path: metrics.json
+success_threshold:
+  val_loss: 0.35
+  val_accuracy: 0.94
