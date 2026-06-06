@@ -9,6 +9,7 @@ dist/
 build/
 experiments/runs/
 experiments/feedback/
+experiments/agent_output/
 metrics.json
 .data/
 .DS_Store

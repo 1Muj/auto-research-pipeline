@@ -15,14 +15,17 @@
 ## 治理 / 虚拟「角色」流程（对标 gstack 思路）
 
 - 文档：`docs/RESEARCH_GOVERNANCE.md`
-- Claude Code 命令说明：`.claude/commands/research-*.md`（office-hours、plan、review、retro）
+- Claude Code 命令说明：`.claude/commands/research-*.md`（office-hours、plan、review、retro）；**全程由 Claude Code 跑终端并改 YAML/脚本**：**research-agent-claude-code**；**对比演示**（先故意错误 YAML，再 MNIST+CNN，固定步骤）：**research-demo-mnist-agent**；**已租 Vast，本地直传代码运行**：**research-vast-push-local**
 - CLI：`auto-research cycle --cwd .`（全部 `experiments/*.yaml` 顺序跑 + 末尾 retro）、或 `cycle -e experiments/<file>.yaml` 只跑一个；也可分步 `preflight` / `run` / `retro`
+- **Agent 一轮**：`auto-research agent --cwd . -e experiments/<file>.yaml` → 预检 + 跑一次 + 读 `experiments/feedback/*.json`，在 `experiments/agent_output/` 写 Markdown 简报；每次成功开始跑之前会把当前实验 YAML 复制到 `agent_output/yaml_backups/<name>_before_agent_run_<时间戳>.yaml`，便于恢复跑前版本；`--llm` 需 `pip install -e ".[anthropic]"` 与 `ANTHROPIC_API_KEY`；`--llm --apply-suggested-yaml` 在覆盖写回前另有 `*_pre_patch_*` 备份（未应用则退出码 3）
 - 可选 YAML 字段：`hypothesis`、`assumptions`、`risks`、`governance_phase`（写入 run 的 `manifest.json`）
 
 ## CI / GPU
 
 - Push 触发 `.github/workflows/ci.yml`（lint + 测试）。
 - 在 Vast GPU 机器上注册 self-hosted runner（标签 `self-hosted`, `gpu`）后，可手动触发 `GPU Research` workflow。
+- **Claude Code 部署 Vast**：使用命令 `research-deploy-vast`（说明见 `.claude/commands/research-deploy-vast.md`）；等价终端：`auto-research vast deploy --cwd .` 或 `bash scripts/deploy_vast_5080.sh`（会读 `deploy/api.env` 里的 `VAST_API_KEY` 等）。
+- **已租 Vast，本地代码直传**：使用命令 `research-vast-push-local`（说明见 `.claude/commands/research-vast-push-local.md`）；等价终端：`auto-research vast push --cwd . --ssh "ssh -p PORT root@HOST" -e experiments/_demo_mnist_cnn.yaml`。
 
 ## API 与密钥（预留位）
 

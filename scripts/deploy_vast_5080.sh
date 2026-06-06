@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # One-shot: search Vast.ai for RTX 5080 (or override), create instance, print SSH and next steps.
+# Same entry: auto-research vast deploy --cwd .
+# Claude Code: command "research-deploy-vast" (.claude/commands/research-deploy-vast.md)
 # Prereq: pip install vastai && vastai set api-key YOUR_KEY
 #
 # Env:
@@ -45,15 +47,16 @@ else
   fi
 fi
 echo "Creating instance from offer ${OFFER_ID}..."
-OUT="$(vastai create instance "${OFFER_ID}" --image "${VAST_IMAGE}" --disk "${VAST_DISK_GB}" --ssh --direct 2>&1 || true)"
+OUT="$(vastai create instance "${OFFER_ID}" --image "${VAST_IMAGE}" --disk "${VAST_DISK_GB}" --ssh --direct 2>&1)"
 echo "${OUT}"
 
 cat <<EOF
 
 Next steps on the new instance:
   1. SSH using the connection string from Vast console or vastai show instances.
-  2. Install Docker + NVIDIA container toolkit (if using containers), or install CUDA driver stack.
-  3. Clone this repo and run: bash scripts/setup_github_runner.sh YOUR_ORG/auto
+  2. Install base tools if the image does not already include them:
+       apt-get update && apt-get install -y git curl tar python3 python3-pip python3-venv
+  3. Clone this repo and run: bash scripts/setup_github_runner.sh OWNER/REPO
   4. In GitHub: add secrets (ANTHROPIC_API_KEY optional), dispatch workflow "GPU Research".
 
 If RTX_5080 is not listed on Vast yet, set for example:

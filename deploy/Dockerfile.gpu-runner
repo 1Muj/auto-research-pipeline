@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /workspace
 COPY . /workspace
-RUN pip3 install --no-cache-dir -e ".[dev,anthropic]"
+RUN pip3 install --no-cache-dir -e ".[dev,anthropic,demo]"
 
 ENV PYTHONPATH=/workspace/src
-CMD ["bash", "-lc", "auto-research run --cwd /workspace -e experiments/example.yaml"]
+CMD ["bash", "-lc", "auto-research run --cwd /workspace -e experiments/_demo_mnist_cnn.yaml"]

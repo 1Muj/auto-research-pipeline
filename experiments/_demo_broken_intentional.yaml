@@ -1,0 +1,31 @@
+# 故意写错的演示：指标与 success_threshold 严重不符，跑一定「阈值不通过」。
+# 交给 Claude Code：请根据 feedback / agent 简报修改本 YAML 或改成调用合理脚本，使 run 通过。
+# 文件名以 _ 开头，不会被 auto-research cycle 批量跑。
+name: demo_broken_intentional
+description: Writes absurd val_loss/val_accuracy; thresholds expect a real MNIST-level run.
+hypothesis: "This file is intentionally wrong for repair practice."
+governance_phase: build
+command:
+  - python
+  - -c
+  - |
+    import json
+    from pathlib import Path
+    Path("metrics.json").write_text(
+        json.dumps(
+            {
+                "val_loss": 9.999,
+                "val_accuracy": 0.01,
+                "train_loss": 9.999,
+                "epochs": 0,
+                "duration_sec": 0.01,
+                "exit_code": 0,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+metrics_path: metrics.json
+success_threshold:
+  val_loss: 0.35
+  val_accuracy: 0.94

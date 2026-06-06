@@ -10,3 +10,5 @@ description: YAML-driven experiment runner with metrics, threshold feedback, pre
 - Summarize recent feedback: `auto-research retro --last 10`
 - Governance fields in YAML (optional): `hypothesis`, `assumptions`, `risks`, `governance_phase` → appear in `experiments/runs/<id>/manifest.json` under `governance`.
 - Full narrative: `docs/RESEARCH_GOVERNANCE.md`
+- **Vast.ai GPU**: Claude command `.claude/commands/research-deploy-vast.md` — rent instance + optional self-hosted runner; CLI `auto-research vast deploy --cwd .` (same as `bash scripts/deploy_vast_5080.sh`).
+- **Claude Code 驱动改文件**: `research-agent-claude-code` — run `agent`, edit from brief. **Contrast demo** (broken intentional YAML + MNIST CNN): `research-demo-mnist-agent`.

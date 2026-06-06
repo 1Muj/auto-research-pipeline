@@ -45,6 +45,16 @@ auto-research run --cwd . -e experiments/demo_smoke.yaml
 auto-research retro --last 5
 ```
 
+**Agent turn** (run + feedback → markdown brief for Claude Code; optional `--llm`). Each successful agent run also copies the experiment YAML to `experiments/agent_output/yaml_backups/*_before_agent_run_<timestamp>.yaml` so you can restore the pre-run version.
+
+```bash
+auto-research agent --cwd . -e experiments/demo_smoke.yaml
+# With API: pip install -e ".[anthropic]" && export ANTHROPIC_API_KEY=...
+auto-research agent --cwd . -e experiments/demo_smoke.yaml --llm
+# With --llm, optionally apply the model's first YAML fence back to the experiment file:
+auto-research agent --cwd . -e experiments/demo_smoke.yaml --llm --apply-suggested-yaml
+```
+
 Create more YAMLs under `experiments/` (template: `experiments/README.md`), then run:
 
 ```bash
@@ -73,10 +83,23 @@ Structured research gates and Claude “roles” without copying external produc
 ## Vast.ai RTX 5080
 
 1. Put `VAST_API_KEY` (and optional `VAST_GPU_QUERY`, …) in `deploy/api.env` from `deploy/api.env.example`, **or** `pip install vastai && vastai set api-key YOUR_KEY` manually.
-2. `./one_click.sh vast` runs `scripts/deploy_vast_5080.sh`, which auto-`source`s `deploy/api.env` when it exists and runs `vastai set api-key` if `VAST_API_KEY` is set.
-3. Override GPU search if needed: `export VAST_GPU_QUERY='gpu_name=RTX_5080 num_gpus=1'` (if unavailable, try `RTX_4090`, etc.)
-4. SSH into the instance and run `bash scripts/setup_github_runner.sh YOUR_ORG/YOUR_REPO`.
+2. Create an instance: `auto-research vast deploy --cwd .` (same as `bash scripts/deploy_vast_5080.sh`). In **Claude Code**, use the `research-deploy-vast` command (see `.claude/commands/research-deploy-vast.md`).
+3. `./one_click.sh vast` runs `scripts/deploy_vast_5080.sh`, which auto-`source`s `deploy/api.env` when it exists and runs `vastai set api-key` if `VAST_API_KEY` is set.
+4. Override GPU search if needed: `export VAST_GPU_QUERY='gpu_name=RTX_5080 num_gpus=1'` (if unavailable, try `RTX_4090`, etc.)
+5. SSH into the instance and run `bash scripts/setup_github_runner.sh YOUR_ORG/YOUR_REPO`.
    Get the runner registration token from Repo → Settings → Actions → Runners and put it in `deploy/api.env` as `GITHUB_TOKEN` or export for one session.
+
+### Vast.ai existing instance: upload local code directly
+
+If you rent the Vast instance manually and do **not** want to push code to GitHub, copy the SSH command from Vast and run:
+
+```bash
+auto-research vast push --cwd . \
+  --ssh "ssh -p 12345 root@23.158.136.85" \
+  -e experiments/_demo_mnist_cnn.yaml
+```
+
+This syncs the local project to `/root/auto-research`, installs a remote venv, runs the experiment, and pulls `experiments/runs/` plus `experiments/feedback/` back to your local machine.
 
 ## GitHub Actions
 

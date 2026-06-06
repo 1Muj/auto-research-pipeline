@@ -9,7 +9,7 @@ on:
       experiment:
         description: "Experiment YAML path relative to repo root"
         required: false
-        default: "experiments/your_experiment.yaml"
+        default: "experiments/_demo_mnist_cnn.yaml"
 
 jobs:
   research:
@@ -25,7 +25,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install -U pip
-          pip install -e ".[dev,anthropic]"
+          pip install -e ".[dev,anthropic,demo]"
 
       - name: NVIDIA sanity
         run: nvidia-smi || true
