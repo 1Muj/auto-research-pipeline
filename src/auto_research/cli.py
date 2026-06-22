@@ -13,6 +13,7 @@ from auto_research.config import PipelineConfig
 from auto_research.pipeline import ResearchPipeline
 from auto_research.preflight import preflight_experiment
 from auto_research.retro import retro_markdown
+from auto_research.reviewer import write_comparison, write_review, write_visualization
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
@@ -303,6 +304,58 @@ def retro_cmd(
     typer.echo(retro_markdown(cfg, last))
 
 
+@app.command("review")
+def review_cmd(
+    experiment: Path = typer.Option(
+        ...,
+        "--experiment",
+        "-e",
+        help="Experiment YAML to review using the latest matching feedback",
+    ),
+    cwd: Path | None = typer.Option(None, "--cwd", help="Project root"),
+    out_dir: Path | None = typer.Option(
+        None,
+        "--out-dir",
+        help="Output directory (default: experiments/agent_output)",
+    ),
+) -> None:
+    """Write a lightweight reviewer/critic brief from metrics and feedback."""
+    cfg = PipelineConfig().resolved(cwd)
+    out = write_review(experiment, cfg, out_dir=out_dir)
+    typer.echo(typer.style(f"Review brief: {out}", fg=typer.colors.CYAN))
+
+
+@app.command("visualize")
+def visualize_cmd(
+    cwd: Path | None = typer.Option(None, "--cwd", help="Project root"),
+    out: Path | None = typer.Option(
+        None,
+        "--out",
+        help="Output HTML path (default: experiments/agent_output/vast_demo_dashboard.html)",
+    ),
+    limit: int = typer.Option(20, "--limit", help="Most recent feedback files to include"),
+) -> None:
+    """Generate a standalone HTML dashboard from run/feedback artifacts."""
+    cfg = PipelineConfig().resolved(cwd)
+    written = write_visualization(cfg, out=out, limit=limit)
+    typer.echo(typer.style(f"Dashboard: {written}", fg=typer.colors.CYAN))
+
+
+@app.command("compare-systems")
+def compare_systems_cmd(
+    cwd: Path | None = typer.Option(None, "--cwd", help="Project root"),
+    out: Path | None = typer.Option(
+        None,
+        "--out",
+        help="Output markdown path (default: docs/comparison_auto_research_agents.md)",
+    ),
+) -> None:
+    """Write a markdown comparison with AI Scientist, Co-Scientist, PaperBench, and ML Intern."""
+    cfg = PipelineConfig().resolved(cwd)
+    written = write_comparison(cfg, out=out)
+    typer.echo(typer.style(f"Comparison: {written}", fg=typer.colors.CYAN))
+
+
 @app.command("version")
 def version_cmd() -> None:
     """Print package version."""
@@ -341,6 +394,8 @@ def _report_brief(report: dict[str, Any], root: Path) -> str:
     parts: list[str] = []
     for k, v in metrics.items():
         if k in ("duration_sec", "exit_code"):
+            continue
+        if isinstance(v, (dict, list)):
             continue
         parts.append(f"{k}={v}")
     if parts:

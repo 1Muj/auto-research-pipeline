@@ -258,14 +258,17 @@ python -m auto_research run --cwd . -e $(quote "${EXPERIMENT}")
 fi
 
 if [[ "${RUN_EXPERIMENT}" -eq 1 && "${PULL_RESULTS}" -eq 1 ]]; then
-  mkdir -p "${ROOT}/experiments/runs" "${ROOT}/experiments/feedback"
+  mkdir -p "${ROOT}/experiments/runs" "${ROOT}/experiments/feedback" \
+    "${ROOT}/experiments/agent_output"
   if [[ "${DRY_RUN}" -eq 1 ]]; then
-    echo "[dry-run] pull remote results back to local experiments/runs and experiments/feedback"
+    echo "[dry-run] pull remote results back to local experiments/runs, feedback, agent_output"
   else
     rsync -az -e "${rsync_ssh}" "${SSH_TARGET}:${REMOTE_DIR}/experiments/runs/" \
       "${ROOT}/experiments/runs/" || true
     rsync -az -e "${rsync_ssh}" "${SSH_TARGET}:${REMOTE_DIR}/experiments/feedback/" \
       "${ROOT}/experiments/feedback/" || true
+    rsync -az -e "${rsync_ssh}" "${SSH_TARGET}:${REMOTE_DIR}/experiments/agent_output/" \
+      "${ROOT}/experiments/agent_output/" || true
   fi
 fi
 

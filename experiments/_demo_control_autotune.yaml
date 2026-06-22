@@ -1,0 +1,21 @@
+# AutoTune-Control demo: specific auto-system optimization for a PID control loop.
+name: demo_control_autotune
+description: Archive-guided PID autotuning over a simulated second-order control system.
+hypothesis: "A propose-simulate-evaluate-critique-refine loop can automatically find stable PID gains with low tracking error and acceptable overshoot."
+governance_phase: build
+command:
+  - python
+  - scripts/demos/control_autotune_demo.py
+  - --iterations
+  - "28"
+  - --metrics-path
+  - metrics.json
+  - --dashboard-path
+  - experiments/agent_output/control_autotune_dashboard.html
+metrics_path: metrics.json
+success_threshold:
+  best_tracking_error: 0.18
+  settling_time: 4.0
+  overshoot: 0.18
+  stability_score: 0.95
+  relative_improvement: 0.20
