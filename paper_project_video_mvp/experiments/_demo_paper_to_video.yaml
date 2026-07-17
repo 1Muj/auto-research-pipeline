@@ -1,0 +1,27 @@
+name: demo_paper_to_video
+description: Build an inspectable paper-to-video storyboard, subtitles, cursor plan, judge feedback, and HTML preview.
+hypothesis: "A builder + judge-agent loop can turn a paper into inspectable video artifacts before expensive rendering."
+governance_phase: mvp
+assumptions:
+  - "The first version should validate workflow structure before using paid TTS/talking-head APIs."
+  - "Intermediate artifacts are useful for professor feedback and FlowMesh integration."
+risks:
+  - "Heuristic summaries are only a baseline; real demos should use an LLM API."
+  - "PDF extraction quality depends on pypdf and the paper layout."
+command:
+  - python
+  - scripts/demos/paper_project_video_demo.py
+  - --input
+  - examples/paper_to_video/sample_paper.md
+  - --kind
+  - paper
+  - --out-dir
+  - experiments/video_output/paper_demo
+  - --fps
+  - "12"
+metrics_path: experiments/video_output/paper_demo/metrics.json
+success_threshold:
+  judge_overall_score: 0.6
+  revision_rounds: 1
+  slide_count: 4
+  subtitle_count: 4

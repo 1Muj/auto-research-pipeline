@@ -17,3 +17,9 @@ metrics.json
 # Local secrets (copy from deploy/api.env.example)
 deploy/api.env
 deploy/vast.env
+deploy/video_api.env
+
+# Local paper/video demo artifacts
+inputs/papers/
+experiments/video_output/
+paper_project_video_mvp/outputs/

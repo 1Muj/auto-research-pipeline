@@ -1,0 +1,27 @@
+name: demo_project_to_video
+description: Build an inspectable project/repository-to-video storyboard and judge report.
+hypothesis: "The same AutoResearch-Video workflow can explain a local project repository, not only a paper."
+governance_phase: mvp
+assumptions:
+  - "The repository has a README or readable text files."
+  - "The first project-video demo should explain architecture and value instead of rendering a polished commercial video."
+risks:
+  - "Large repositories need better file selection and code-aware summarization."
+  - "A project demo may need screen recordings or UI captures in later versions."
+command:
+  - python
+  - scripts/demos/paper_project_video_demo.py
+  - --input
+  - examples/project_to_video
+  - --kind
+  - project
+  - --out-dir
+  - experiments/video_output/project_demo
+  - --fps
+  - "12"
+metrics_path: experiments/video_output/project_demo/metrics.json
+success_threshold:
+  judge_overall_score: 0.6
+  revision_rounds: 1
+  slide_count: 4
+  subtitle_count: 4
