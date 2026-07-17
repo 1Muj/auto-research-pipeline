@@ -101,6 +101,88 @@ auto-research vast push --cwd . \
 
 This syncs the local project to `/root/auto-research`, installs a remote venv, runs the experiment, and pulls `experiments/runs/` plus `experiments/feedback/` back to your local machine.
 
+### Paper / Project To Video MVP
+
+This branch includes a runnable paper/project-to-video MVP. It turns a paper PDF/Markdown file or a local project folder into inspectable workflow artifacts and a rendered `video.mp4`.
+
+Pipeline:
+
+```text
+paper/project input
+→ ingest
+→ slide builder
+→ subtitle builder
+→ cursor builder
+→ talker plan
+→ judge agent
+→ module-level revise loop
+→ renderer
+→ video.mp4
+```
+
+Run the built-in demo:
+
+```bash
+auto-research video demo --fps 12
+```
+
+Run a custom paper:
+
+```bash
+auto-research video build \
+  --input "inputs/papers/your_paper.pdf" \
+  --kind paper \
+  --out-dir experiments/video_output/your_paper_demo \
+  --use-api \
+  --fps 12 \
+  --min-revisions 1 \
+  --max-revisions 2
+```
+
+For DeepSeek-compatible text generation:
+
+```bash
+export OPENAI_API_KEY="YOUR_KEY"
+export OPENAI_BASE_URL="https://api.deepseek.com"
+export OPENAI_MODEL="deepseek-chat"
+```
+
+Main outputs:
+
+- `video.mp4`: rendered video
+- `slides.md`: generated slides
+- `subtitles.srt`: narration subtitles
+- `cursor_plan.json`: cursor movement plan
+- `judge_feedback.json`: module-level judge feedback
+- `revision_history.json`: judge → revise loop history
+- `flowmesh_spec.json`: FlowMesh-style DAG blueprint
+- `metrics.json`: run metrics
+
+Optional VLM cursor grounding:
+
+```bash
+auto-research video build \
+  --input examples/paper_to_video/sample_paper.md \
+  --kind paper \
+  --out-dir experiments/video_output/paper_vlm_demo \
+  --use-vlm-cursor \
+  --fps 12
+```
+
+Configure a vision-capable OpenAI-compatible model with:
+
+```bash
+OPENAI_VISION_API_KEY=
+OPENAI_VISION_BASE_URL=
+OPENAI_VISION_MODEL=
+```
+
+More details:
+
+- `docs/PAPER_PROJECT_TO_VIDEO_IMPLEMENTATION_CN.md`
+- `docs/CURRENT_PROGRESS_AND_LIMITATIONS_CN.md`
+- `paper_project_video_mvp/README.md`
+
 ## GitHub Actions
 
 - **CI**: runs lint + pytest on push/PR (core quality gate).
