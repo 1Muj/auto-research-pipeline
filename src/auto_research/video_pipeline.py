@@ -1306,6 +1306,100 @@ def build_subtitles(slides: list[dict[str, Any]], *, seconds_per_slide: int) -> 
     return subtitles
 
 
+def build_scene_timeline(
+    source: dict[str, Any],
+    slides: list[dict[str, Any]],
+    subtitles: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Turn slide-organized content into narration-driven video shots."""
+    by_slide: dict[int, list[dict[str, Any]]] = {}
+    for subtitle in subtitles:
+        by_slide.setdefault(int(subtitle.get("slide_index") or 0), []).append(dict(subtitle))
+    for items in by_slide.values():
+        items.sort(key=lambda item: float(item.get("start_sec") or 0))
+
+    timeline: list[dict[str, Any]] = []
+    for slide_position, slide in enumerate(slides, start=1):
+        slide_index = int(slide.get("index") or slide_position)
+        items = by_slide.get(slide_index, [])
+        if not items:
+            start = float(timeline[-1]["end_sec"]) if timeline else 0.0
+            items = [
+                {
+                    "slide_index": slide_index,
+                    "start_sec": start,
+                    "end_sec": start + 8.0,
+                    "text": slide.get("speaker_note") or " ".join(slide.get("bullets") or []),
+                }
+            ]
+
+        beats: list[dict[str, Any]] = []
+        if len(items) == 1:
+            item = items[0]
+            start = float(item.get("start_sec") or 0)
+            end = max(start + 2.0, float(item.get("end_sec") or start + 8.0))
+            split = start + (end - start) * 0.38
+            beats = [
+                {**item, "start_sec": start, "end_sec": split, "synthetic_beat": "setup"},
+                {**item, "start_sec": split, "end_sec": end, "synthetic_beat": "explain"},
+            ]
+        else:
+            beats = items[:4]
+
+        visual_kind = str(slide.get("visual_kind") or "image").lower()
+        bullets = [_clean_display_text(item) for item in slide.get("bullets", []) if str(item).strip()]
+        for beat_index, beat in enumerate(beats):
+            start = float(beat.get("start_sec") or 0)
+            end = max(start + 1.0, float(beat.get("end_sec") or start + 5.0))
+            is_first = beat_index == 0
+            is_last = beat_index == len(beats) - 1
+            if slide_position == 1 and is_first:
+                shot_type = "opener"
+            elif visual_kind == "flow":
+                shot_type = "process"
+            elif visual_kind == "table":
+                shot_type = "evidence"
+            elif visual_kind == "metrics":
+                shot_type = "metric"
+            elif visual_kind == "image" and not is_last:
+                shot_type = "image_focus"
+            elif is_last:
+                shot_type = "synthesis"
+            else:
+                shot_type = "key_claim"
+
+            focus_index = min(beat_index, max(0, len(bullets) - 1))
+            focus_text = bullets[focus_index] if bullets else _clean_display_text(beat.get("text"))
+            timeline.append(
+                {
+                    "shot_id": f"s{slide_index:02d}-{beat_index + 1:02d}",
+                    "slide_index": slide_index,
+                    "shot_index": beat_index + 1,
+                    "start_sec": round(start, 3),
+                    "end_sec": round(end, 3),
+                    "duration_sec": round(end - start, 3),
+                    "shot_type": shot_type,
+                    "headline": _clean_display_text(slide.get("title")),
+                    "section_label": _clean_display_text(slide.get("purpose")) or f"Part {slide_index}",
+                    "narration": _clean_display_text(beat.get("text")),
+                    "focus_text": focus_text,
+                    "focus_index": focus_index,
+                    "visual_kind": visual_kind,
+                    "transition": "fade" if is_first else "continue",
+                    "motion": {
+                        "opener": "title_reveal",
+                        "process": "sequential_nodes",
+                        "evidence": "row_reveal",
+                        "metric": "number_focus",
+                        "image_focus": "image_settle",
+                        "synthesis": "takeaway_stack",
+                        "key_claim": "statement_reveal",
+                    }.get(shot_type, "statement_reveal"),
+                }
+            )
+    return timeline
+
+
 def build_cursor_plan(
     subtitles: list[dict[str, Any]],
     *,
@@ -2743,7 +2837,17 @@ def render_mp4_video(
     except ImportError:
         return False
 
-    style = os.environ.get("AUTO_VIDEO_RENDER_STYLE", "arbor").strip().lower()
+    style = os.environ.get("AUTO_VIDEO_RENDER_STYLE", "scene").strip().lower()
+    if style in {"scene", "cinematic", "video"}:
+        return _render_scene_mp4_video(
+            source,
+            slides,
+            subtitles,
+            out,
+            width=width,
+            height=height,
+            fps=fps,
+        )
     if style == "arbor":
         return _render_arbor_mp4_video(
             source,
@@ -2926,6 +3030,438 @@ def render_mp4_video(
     if ok:
         shutil.rmtree(frames_dir, ignore_errors=True)
     return ok
+
+
+def _render_scene_mp4_video(
+    source: dict[str, Any],
+    slides: list[dict[str, Any]],
+    subtitles: list[dict[str, Any]],
+    out: Path,
+    *,
+    width: int,
+    height: int,
+    fps: int,
+) -> bool:
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        return False
+
+    frames_dir = out.parent / "scene_frames"
+    if frames_dir.exists():
+        shutil.rmtree(frames_dir)
+    frames_dir.mkdir(parents=True, exist_ok=True)
+
+    timeline = build_scene_timeline(source, slides, subtitles)
+    (out.parent / "scene_timeline.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "mode": "scene_based_research_explainer",
+                "reference_style": "Arbor-inspired event-driven minimal motion",
+                "shot_count": len(timeline),
+                "shots": timeline,
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    if not timeline:
+        return False
+
+    slide_lookup = {int(slide.get("index") or i): slide for i, slide in enumerate(slides, start=1)}
+    theme = _paper_visual_theme(source)
+    background_color = tuple(theme["background"])
+    total_duration = max(float(shot["end_sec"]) for shot in timeline)
+    fonts = {
+        "display": _font(58),
+        "headline": _font(36),
+        "body": _font(25),
+        "small": _font(17),
+        "mono": _font(16),
+        "caption": _font(22),
+        "number": _font(92),
+    }
+    frame_index = 0
+    _progress("renderer", "start scene-based rendering", current=0, total=len(timeline), detail=f"fps={fps} shots={len(timeline)}")
+    for shot_position, shot in enumerate(timeline, start=1):
+        slide = slide_lookup.get(int(shot["slide_index"]), {})
+        duration = max(1.0 / max(1, fps), float(shot["end_sec"]) - float(shot["start_sec"]))
+        frame_count = max(1, int(round(duration * fps)))
+        _progress(
+            "renderer",
+            "draw video shot",
+            current=shot_position,
+            total=len(timeline),
+            detail=f"id={shot['shot_id']} type={shot['shot_type']} frames={frame_count}",
+        )
+        for tick in range(frame_count):
+            sec = float(shot["start_sec"]) + tick / fps
+            local = tick / max(1, frame_count - 1)
+            img = Image.new("RGB", (width, height), background_color)
+            draw = ImageDraw.Draw(img)
+            _draw_arbor_background(draw, width, height, sec, source=source, slide=slide)
+            background_frame = img.copy()
+            _draw_scene_progress(
+                draw,
+                shot,
+                theme=theme,
+                width=width,
+                total_duration=total_duration,
+                sec=sec,
+                font=fonts["small"],
+            )
+            _draw_scene_composition(
+                draw,
+                slide,
+                shot,
+                theme=theme,
+                width=width,
+                height=height,
+                local=local,
+                fonts=fonts,
+            )
+            _draw_scene_narration(
+                draw,
+                str(shot.get("narration") or ""),
+                theme=theme,
+                width=width,
+                height=height,
+                local=local,
+                font=fonts["caption"],
+            )
+
+            enter = _scene_ease(min(1.0, local / 0.16))
+            exit_alpha = _scene_ease(min(1.0, max(0.0, (1.0 - local) / 0.08)))
+            alpha = max(0.18, min(enter, exit_alpha))
+            if alpha < 1.0:
+                img = Image.blend(background_frame, img, alpha)
+            img.save(frames_dir / f"frame_{frame_index:05d}.png")
+            frame_index += 1
+
+    _progress("renderer", "start scene ffmpeg encoding", detail=f"frames={frame_index} fps={fps} out={out.name}")
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-framerate",
+        str(fps),
+        "-start_number",
+        "0",
+        "-i",
+        str(frames_dir / "frame_%05d.png"),
+        "-c:v",
+        "libx264",
+        "-preset",
+        os.environ.get("AUTO_VIDEO_FFMPEG_PRESET", "veryfast"),
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(out),
+    ]
+    proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    ok = proc.returncode == 0 and out.is_file() and out.stat().st_size > 0
+    _progress("renderer", "scene encoding complete" if ok else "scene encoding failed", detail=f"returncode={proc.returncode} out={out}")
+    if ok:
+        shutil.rmtree(frames_dir, ignore_errors=True)
+    return ok
+
+
+def _scene_ease(value: float) -> float:
+    value = max(0.0, min(1.0, value))
+    return value * value * (3.0 - 2.0 * value)
+
+
+def _draw_scene_progress(
+    draw: Any,
+    shot: dict[str, Any],
+    *,
+    theme: dict[str, Any],
+    width: int,
+    total_duration: float,
+    sec: float,
+    font: Any,
+) -> None:
+    accent = tuple(theme["accent"])
+    muted = (142, 157, 178)
+    label = str(shot.get("section_label") or shot.get("headline") or "Research")
+    _draw_single_line_text(draw, label.upper(), (64, 42), font=font, width=760, fill=accent)
+    shot_label = f"{shot.get('shot_id', '')}  {str(shot.get('shot_type', '')).replace('_', ' ').upper()}"
+    _draw_single_line_text(draw, shot_label, (width - 330, 42), font=font, width=266, fill=muted)
+    progress = max(0.0, min(1.0, sec / max(0.001, total_duration)))
+    draw.rectangle((64, 78, width - 64, 80), fill=tuple(theme["line"]))
+    draw.rectangle((64, 78, 64 + int((width - 128) * progress), 81), fill=accent)
+
+
+def _draw_scene_composition(
+    draw: Any,
+    slide: dict[str, Any],
+    shot: dict[str, Any],
+    *,
+    theme: dict[str, Any],
+    width: int,
+    height: int,
+    local: float,
+    fonts: dict[str, Any],
+) -> None:
+    reveal = _scene_ease(min(1.0, local / 0.36))
+    y_shift = int((1.0 - reveal) * 28)
+    shot_type = str(shot.get("shot_type") or "key_claim")
+    accent = tuple(theme["accent"])
+    fg = (244, 247, 251)
+    muted = (154, 177, 207)
+
+    if shot_type == "opener":
+        draw.rectangle((76, 176 + y_shift, 84, 366 + y_shift), fill=accent)
+        _draw_wrapped_text(
+            draw,
+            str(shot.get("headline") or ""),
+            (112, 172 + y_shift),
+            font=fonts["display"],
+            width=880,
+            max_height=205,
+            fill=fg,
+            spacing=8,
+            max_lines=4,
+        )
+        _draw_wrapped_text(
+            draw,
+            str(shot.get("focus_text") or shot.get("section_label") or ""),
+            (114, 398 + y_shift),
+            font=fonts["body"],
+            width=760,
+            max_height=92,
+            fill=muted,
+            spacing=5,
+            max_lines=3,
+        )
+        draw.text((width - 250, 366), "01", fill=accent, font=fonts["number"])
+        return
+
+    headline = str(shot.get("headline") or "")
+    _draw_single_line_text(draw, headline, (76, 112 + y_shift), font=fonts["headline"], width=1128, fill=fg)
+
+    if shot_type == "image_focus":
+        _draw_wrapped_text(
+            draw,
+            str(shot.get("focus_text") or ""),
+            (76, 196 + y_shift),
+            font=fonts["body"],
+            width=450,
+            max_height=230,
+            fill=fg,
+            spacing=7,
+            max_lines=6,
+        )
+        image_shift = int((1.0 - reveal) * 44)
+        image_box = (590 + image_shift, 164, width - 76 + image_shift, height - 174)
+        if not _draw_generated_image(draw, slide, image_box):
+            _draw_scene_visual_fallback(draw, slide, image_box, reveal=reveal, fonts=fonts)
+        draw.rectangle((76, 470, 486, 474), fill=accent)
+        _draw_single_line_text(
+            draw,
+            slide.get("visual_caption", ""),
+            (76, 490),
+            font=fonts["small"],
+            width=450,
+            fill=muted,
+        )
+    elif shot_type == "process":
+        _draw_scene_process(draw, slide, (76, 205, width - 76, 500), reveal=reveal, accent=accent, fonts=fonts)
+    elif shot_type == "evidence":
+        _draw_scene_evidence(draw, slide, (92, 190, width - 92, 510), reveal=reveal, fonts=fonts)
+    elif shot_type == "metric":
+        _draw_scene_metric(draw, slide, shot, (76, 182, width - 76, 510), reveal=reveal, accent=accent, fonts=fonts)
+    elif shot_type == "synthesis":
+        _draw_scene_takeaways(draw, slide, (92, 190, width - 92, 510), reveal=reveal, accent=accent, fonts=fonts)
+    else:
+        index = int(shot.get("focus_index") or 0) + 1
+        draw.text((width - 252, 170), f"{index:02d}", fill=accent, font=fonts["number"])
+        _draw_wrapped_text(
+            draw,
+            str(shot.get("focus_text") or ""),
+            (92, 206 + y_shift),
+            font=fonts["display"],
+            width=850,
+            max_height=250,
+            fill=fg,
+            spacing=8,
+            max_lines=5,
+        )
+
+
+def _draw_scene_process(
+    draw: Any,
+    slide: dict[str, Any],
+    box: tuple[int, int, int, int],
+    *,
+    reveal: float,
+    accent: tuple[int, int, int],
+    fonts: dict[str, Any],
+) -> None:
+    x1, y1, x2, y2 = box
+    items = [_clean_visual_item(str(item)) for item in (slide.get("visual_items") or slide.get("bullets") or [])[:5]]
+    if not items:
+        items = ["Input", "Reason", "Generate", "Evaluate"]
+    visible = min(len(items), max(1, int(math.ceil(reveal * len(items)))))
+    gap = 22
+    node_w = max(120, (x2 - x1 - gap * (len(items) - 1)) // len(items))
+    center_y = (y1 + y2) // 2
+    for i, item in enumerate(items):
+        x = x1 + i * (node_w + gap)
+        if i > 0 and i < visible:
+            draw.line((x - gap + 3, center_y, x - 5, center_y), fill=accent, width=3)
+            draw.polygon([(x - 8, center_y - 6), (x, center_y), (x - 8, center_y + 6)], fill=accent)
+        if i >= visible:
+            continue
+        active = i == visible - 1
+        outline = accent if active else (54, 88, 119)
+        draw.rounded_rectangle((x, center_y - 62, x + node_w, center_y + 62), radius=7, fill=(9, 18, 29), outline=outline, width=2)
+        draw.text((x + 16, center_y - 44), f"{i + 1:02d}", fill=accent, font=fonts["small"])
+        _draw_wrapped_text(
+            draw,
+            item,
+            (x + 16, center_y - 10),
+            font=fonts["small"],
+            width=node_w - 32,
+            max_height=56,
+            fill=(226, 236, 248),
+            spacing=3,
+            max_lines=3,
+        )
+
+
+def _draw_scene_evidence(
+    draw: Any,
+    slide: dict[str, Any],
+    box: tuple[int, int, int, int],
+    *,
+    reveal: float,
+    fonts: dict[str, Any],
+) -> None:
+    _draw_arbor_table(draw, slide, box, reveal=reveal, font=fonts["mono"])
+
+
+def _draw_scene_metric(
+    draw: Any,
+    slide: dict[str, Any],
+    shot: dict[str, Any],
+    box: tuple[int, int, int, int],
+    *,
+    reveal: float,
+    accent: tuple[int, int, int],
+    fonts: dict[str, Any],
+) -> None:
+    x1, y1, x2, y2 = box
+    rows = [row for row in (slide.get("visual_table") or []) if isinstance(row, list)]
+    items = [_clean_visual_item(str(item)) for item in (slide.get("visual_items") or slide.get("bullets") or [])[:4]]
+    row_items = [_clean_visual_item(" | ".join(str(cell) for cell in row[:3])) for row in rows[1:5]]
+    cards = _metric_cards_from_items(row_items or items)
+    focus_index = min(int(shot.get("focus_index") or 0), max(0, len(cards) - 1))
+    value, label = cards[focus_index]
+    draw.text((x1, y1 + 18), value, fill=accent, font=fonts["number"])
+    _draw_wrapped_text(
+        draw,
+        label,
+        (x1 + 8, y1 + 126),
+        font=fonts["headline"],
+        width=520,
+        max_height=120,
+        fill=(239, 244, 250),
+        spacing=5,
+        max_lines=3,
+    )
+    visible = min(len(cards), max(1, int(math.ceil(reveal * len(cards)))))
+    for i, (small_value, small_label) in enumerate(cards[:visible]):
+        y = y1 + i * 66
+        draw.text((x1 + 650, y + 6), small_value, fill=accent, font=fonts["small"])
+        _draw_single_line_text(draw, small_label, (x1 + 760, y + 6), font=fonts["small"], width=x2 - x1 - 770, fill=(194, 208, 226))
+        draw.line((x1 + 650, y + 42, x2, y + 42), fill=(38, 60, 82), width=1)
+
+
+def _draw_scene_takeaways(
+    draw: Any,
+    slide: dict[str, Any],
+    box: tuple[int, int, int, int],
+    *,
+    reveal: float,
+    accent: tuple[int, int, int],
+    fonts: dict[str, Any],
+) -> None:
+    x1, y1, x2, _y2 = box
+    items = [_clean_display_text(item) for item in (slide.get("bullets") or slide.get("visual_items") or [])[:3]]
+    visible = min(len(items), max(1, int(math.ceil(reveal * len(items)))))
+    for i, item in enumerate(items[:visible]):
+        y = y1 + i * 94
+        draw.text((x1, y), f"{i + 1:02d}", fill=accent, font=fonts["body"])
+        _draw_wrapped_text(
+            draw,
+            item,
+            (x1 + 76, y - 2),
+            font=fonts["body"],
+            width=x2 - x1 - 90,
+            max_height=72,
+            fill=(232, 239, 248),
+            spacing=4,
+            max_lines=3,
+        )
+        draw.line((x1 + 76, y + 70, x2, y + 70), fill=(37, 59, 80), width=1)
+
+
+def _draw_scene_visual_fallback(
+    draw: Any,
+    slide: dict[str, Any],
+    box: tuple[int, int, int, int],
+    *,
+    reveal: float,
+    fonts: dict[str, Any],
+) -> None:
+    kind = str(slide.get("visual_kind") or "image")
+    if kind == "flow":
+        _draw_scene_process(draw, slide, box, reveal=reveal, accent=(20, 184, 166), fonts=fonts)
+    elif kind == "table":
+        _draw_scene_evidence(draw, slide, box, reveal=reveal, fonts=fonts)
+    elif kind == "metrics":
+        _draw_scene_metric(
+            draw,
+            slide,
+            {"focus_index": 0},
+            box,
+            reveal=reveal,
+            accent=(20, 184, 166),
+            fonts=fonts,
+        )
+    else:
+        _draw_scene_takeaways(draw, slide, box, reveal=reveal, accent=(20, 184, 166), fonts=fonts)
+
+
+def _draw_scene_narration(
+    draw: Any,
+    narration: str,
+    *,
+    theme: dict[str, Any],
+    width: int,
+    height: int,
+    local: float,
+    font: Any,
+) -> None:
+    if not narration:
+        return
+    accent = tuple(theme["accent"])
+    y = height - 126 + int((1.0 - _scene_ease(min(1.0, local / 0.28))) * 18)
+    draw.rectangle((76, y, 82, height - 48), fill=accent)
+    _draw_wrapped_text(
+        draw,
+        narration,
+        (102, y - 2),
+        font=font,
+        width=width - 178,
+        max_height=72,
+        fill=(226, 236, 248),
+        spacing=4,
+        max_lines=3,
+    )
 
 
 def _render_arbor_mp4_video(
@@ -4040,9 +4576,30 @@ def run_video_pipeline(
         json.dumps(cursor_plan, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+    scene_timeline = build_scene_timeline(source, slides, subtitles)
+    (out_dir / "scene_timeline.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "mode": "scene_based_research_explainer",
+                "reference_style": "Arbor-inspired event-driven minimal motion",
+                "shot_count": len(scene_timeline),
+                "shots": scene_timeline,
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     (out_dir / "storyboard.json").write_text(
         json.dumps(
-            {"slides": slides, "subtitles": subtitles, "cursor_plan": cursor_plan, "talker_plan": talker},
+            {
+                "slides": slides,
+                "subtitles": subtitles,
+                "cursor_plan": cursor_plan,
+                "talker_plan": talker,
+                "scene_timeline": scene_timeline,
+            },
             indent=2,
             ensure_ascii=False,
         ),
@@ -4090,6 +4647,7 @@ def run_video_pipeline(
         "failed_modules": judge.get("failed_modules", []),
         "rerun_modules_next": judge.get("rerun_modules_next", []),
         "slide_count": len(slides),
+        "scene_shot_count": len(scene_timeline),
         "subtitle_count": len(subtitles),
         "estimated_duration_sec": total_duration,
         "audio_duration_sec": round(audio_duration, 3) if audio_duration else None,
@@ -4128,7 +4686,8 @@ def run_video_pipeline(
         "image_generation_path": str(out_dir / "image_generation.json"),
         "video_rendered": video_rendered,
         "fps": fps,
-        "renderer_version": "arbor_dynamic_ppt_layout_tablefix_v2",
+        "renderer_version": "scene_based_research_explainer_v1",
+        "render_style": os.environ.get("AUTO_VIDEO_RENDER_STYLE", "scene"),
         "visual_theme": source.get("visual_theme", "signal"),
         "vlm_cursor_requested": use_vlm_cursor,
         "omni_cursor_requested": use_omni_cursor,
@@ -4137,6 +4696,7 @@ def run_video_pipeline(
         "video_path": str(video_path) if video_rendered else "",
         "preview_path": str(preview_path),
         "storyboard_path": str(out_dir / "storyboard.json"),
+        "scene_timeline_path": str(out_dir / "scene_timeline.json"),
         "flowmesh_spec_path": str(out_dir / "flowmesh_spec.json"),
         "revision_history_path": str(revision_history_path),
     }

@@ -4,6 +4,7 @@ from PIL import Image, ImageDraw
 
 from auto_research.video_pipeline import (
     PAPER_VISUAL_THEMES,
+    build_scene_timeline,
     choose_paper_visual_theme,
     _clean_display_text,
     _draw_generated_image,
@@ -79,3 +80,37 @@ def test_paper_theme_tracks_domain_and_stays_deterministic(monkeypatch) -> None:
     assert physics == "orbit"
     assert choose_paper_visual_theme(unknown_source) == choose_paper_visual_theme(unknown_source)
     assert choose_paper_visual_theme(unknown_source) in PAPER_VISUAL_THEMES
+
+
+def test_scene_timeline_splits_slides_into_video_shots() -> None:
+    source = {"title": "Scene Test", "text": "A compact research explanation."}
+    slides = [
+        {
+            "index": 1,
+            "title": "Research Question",
+            "purpose": "Establish the problem.",
+            "bullets": ["Static slides do not use temporal visual storytelling."],
+            "visual_kind": "image",
+        },
+        {
+            "index": 2,
+            "title": "Method",
+            "purpose": "Explain the pipeline.",
+            "bullets": ["Parse evidence.", "Plan shots.", "Render motion."],
+            "visual_kind": "flow",
+            "visual_items": ["Evidence", "Shots", "Motion"],
+        },
+    ]
+    subtitles = [
+        {"slide_index": 1, "start_sec": 0, "end_sec": 6, "text": "The project begins with one research question."},
+        {"slide_index": 2, "start_sec": 6, "end_sec": 11, "text": "First parse the evidence."},
+        {"slide_index": 2, "start_sec": 11, "end_sec": 16, "text": "Then animate the planned shots."},
+    ]
+
+    timeline = build_scene_timeline(source, slides, subtitles)
+
+    assert len(timeline) == 4
+    assert timeline[0]["shot_type"] == "opener"
+    assert timeline[2]["shot_type"] == "process"
+    assert timeline[-1]["motion"] == "sequential_nodes"
+    assert all(shot["end_sec"] > shot["start_sec"] for shot in timeline)

@@ -35,16 +35,17 @@ DEFAULT_DIMENSIONS = [
         "name": "Slide Visual Quality",
         "weight": 0.18,
         "description": (
-            "Checks whether the PPT pages are readable, structured, and visually useful."
+            "Checks whether visual scenes are readable, structured, and useful over time."
         ),
         "checkpoints": [
-            "Slide text is legible and not overcrowded.",
-            "Layout, hierarchy, charts, and tables support scanning and comprehension.",
+            "Text and visual layers are legible and not overcrowded.",
+            "Layout, hierarchy, charts, images, and diagrams support comprehension.",
             "Visual elements serve the explanation rather than acting as decoration.",
-            "Information density fits a narrated video format.",
+            "The video does not merely hold a complete static PPT page on screen.",
+            "Information is revealed progressively at a density suitable for narrated video.",
         ],
-        "high_signals": ["legible slides", "clear hierarchy", "useful visuals", "balanced density"],
-        "low_signals": ["tiny text", "crowded layout", "irrelevant visuals", "weak hierarchy"],
+        "high_signals": ["legible scenes", "clear hierarchy", "useful visuals", "progressive reveal"],
+        "low_signals": ["tiny text", "static PPT framing", "irrelevant visuals", "weak hierarchy"],
     },
     {
         "id": "audio_narration_quality",
@@ -70,13 +71,13 @@ DEFAULT_DIMENSIONS = [
             "Checks whether slide, narration, subtitles, cursor/focus, and timing agree."
         ),
         "checkpoints": [
-            "Current narration corresponds to the active slide.",
-            "Subtitles, visual focus, cursor movement, and key frames support the spoken point.",
+            "Current narration corresponds to the active scene and shot.",
+            "Subtitles, visual focus, layer animation, and key frames support the spoken point.",
             "There is no repeated pattern of saying one thing while showing another.",
-            "Per-slide duration is appropriate for the amount of content.",
+            "Shot changes and visual reveals occur when the narration changes semantic focus.",
         ],
-        "high_signals": ["slide-speech match", "good timing", "useful visual focus"],
-        "low_signals": ["talking about absent content", "mistimed slide changes", "random focus"],
+        "high_signals": ["shot-speech match", "good timing", "useful visual focus"],
+        "low_signals": ["talking about absent content", "mistimed shot changes", "random focus"],
     },
     {
         "id": "stability_overall_experience",
@@ -86,6 +87,8 @@ DEFAULT_DIMENSIONS = [
         "checkpoints": [
             "The whole video keeps a coherent style, difficulty level, and explanation rhythm.",
             "The presentation does not degrade, contradict itself, or lose the audience halfway.",
+            "Motion is purposeful, restrained, and used to explain sequence, causality, or comparison.",
+            "The result feels like a video-native research explainer rather than a recorded slideshow.",
             "The viewer can leave with a useful understanding of the topic.",
         ],
         "high_signals": ["consistent style", "stable pacing", "coherent story", "viewer value"],
@@ -524,6 +527,7 @@ def load_artifact_context(
         "subtitles_srt": "subtitles.srt",
         "cursor_plan": "cursor_plan.json",
         "talker_plan": "talker_plan.json",
+        "scene_timeline": "scene_timeline.json",
     }
     context: dict[str, Any] = {
         "artifact_dir": str(artifact_dir.resolve()),
@@ -565,7 +569,7 @@ def load_artifact_context(
 def build_system_prompt(rubric: dict[str, Any]) -> str:
     return textwrap.dedent(
         f"""
-        You are a strict multimodal evaluator for PPT explanation videos.
+        You are a strict multimodal evaluator for research explanation videos.
 
         Your evaluation style is adapted from DirectorBench:
         - Diagnose checkpoint-level bottlenecks instead of only giving one total score.
@@ -579,9 +583,10 @@ def build_system_prompt(rubric: dict[str, Any]) -> str:
         Scoring standard:
         {json.dumps(rubric, ensure_ascii=False, indent=2)}
 
-        High scores require real viewer value: correct content, clear explanation, readable PPT,
-        strong slide-narration alignment, and concrete revision advice. Visual polish alone is
-        not enough.
+        High scores require real viewer value: correct content, clear explanation, readable
+        visual scenes, narration-driven shot progression, strong cross-modal alignment, and
+        concrete revision advice. Visual polish alone is not enough. Penalize videos that simply
+        hold a complete PPT page on screen for long periods without meaningful temporal storytelling.
 
         Return JSON only. Do not include Markdown, explanations outside JSON, or extra keys.
         """
@@ -720,6 +725,18 @@ def summarize_artifact_context(artifact_context: dict[str, Any]) -> dict[str, An
     cursor_plan = (
         storyboard.get("cursor_plan") if isinstance(storyboard.get("cursor_plan"), list) else []
     )
+    scene_timeline_artifact = (
+        artifact_context.get("scene_timeline")
+        if isinstance(artifact_context.get("scene_timeline"), dict)
+        else {}
+    )
+    scene_timeline = (
+        scene_timeline_artifact.get("shots")
+        if isinstance(scene_timeline_artifact.get("shots"), list)
+        else storyboard.get("scene_timeline")
+        if isinstance(storyboard.get("scene_timeline"), list)
+        else []
+    )
     slide_summaries: list[dict[str, Any]] = []
     for slide in slides[:12]:
         if not isinstance(slide, dict):
@@ -745,6 +762,19 @@ def summarize_artifact_context(artifact_context: dict[str, Any]) -> dict[str, An
         for item in subtitles[:24]
         if isinstance(item, dict)
     ]
+    shot_samples = [
+        {
+            "shot_id": item.get("shot_id"),
+            "slide_index": item.get("slide_index"),
+            "start_sec": item.get("start_sec"),
+            "end_sec": item.get("end_sec"),
+            "shot_type": item.get("shot_type"),
+            "motion": item.get("motion"),
+            "focus_text": _truncate_text(item.get("focus_text"), 220),
+        }
+        for item in scene_timeline[:32]
+        if isinstance(item, dict)
+    ]
     return {
         "artifact_dir": artifact_context.get("artifact_dir"),
         "available_files": artifact_context.get("available_files", []),
@@ -760,6 +790,8 @@ def summarize_artifact_context(artifact_context: dict[str, Any]) -> dict[str, An
             "video_rendered": metrics.get("video_rendered"),
             "video_path": metrics.get("video_path"),
             "slide_count": metrics.get("slide_count"),
+            "scene_shot_count": metrics.get("scene_shot_count"),
+            "render_style": metrics.get("render_style"),
             "subtitle_count": metrics.get("subtitle_count"),
             "estimated_duration_sec": metrics.get("estimated_duration_sec"),
             "judge_overall_score": metrics.get("judge_overall_score"),
@@ -780,6 +812,7 @@ def summarize_artifact_context(artifact_context: dict[str, Any]) -> dict[str, An
         },
         "slides": slide_summaries,
         "subtitle_samples": subtitle_samples,
+        "scene_shot_samples": shot_samples,
         "cursor_sample_count": len(cursor_plan),
         "transcript_excerpt": _truncate_text(artifact_context.get("external_transcript"), 1800),
         "modality_note": (

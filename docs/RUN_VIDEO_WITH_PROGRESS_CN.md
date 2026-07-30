@@ -72,6 +72,17 @@ cd /Users/muj666/Desktop/auto
 AUTO_VIDEO_THEME=orbit ./scripts/run_video_with_eval.sh
 ```
 
+默认 `AUTO_VIDEO_RENDER_STYLE=scene`，会把每页内容拆成 2–4 个由旁白驱动的镜头，
+以标题、论点、论文图、流程节点、证据行、指标和字幕等独立图层构成视频，不再显示完整 PPT 边框。
+镜头规划保存在输出目录的 `scene_timeline.json`。
+
+如需回看旧版 PPT 式 renderer：
+
+```bash
+cd /Users/muj666/Desktop/auto
+AUTO_VIDEO_RENDER_STYLE=arbor ./scripts/run_video_with_eval.sh
+```
+
 默认 `AUTO_VIDEO_IMAGE_MODE=image_only`：只有 `visual_kind=image` 的页会调用图像模型，
 流程图、表格、指标页优先用本地 renderer 画，避免 AI 图像生成出残缺截图或假 UI。
 
