@@ -1,0 +1,18 @@
+# Vast-friendly demo: compact version of Hugging Face ML Intern style loop.
+name: demo_ml_intern_lite
+description: Lightweight ML Intern-style engineering loop with plan, tool trace, artifact, and shipping metrics.
+hypothesis: "An ML-engineer agent can be represented as a measurable plan/tool/artifact loop inside auto-research."
+governance_phase: review
+command:
+  - python
+  - scripts/demos/research_agent_lite_demo.py
+  - --mode
+  - ml-intern-lite
+  - --metrics-path
+  - metrics.json
+metrics_path: metrics.json
+success_threshold:
+  task_plan_score: 0.85
+  tool_trace_events: 5
+  artifact_score: 0.85
+  shipping_readiness: 0.80

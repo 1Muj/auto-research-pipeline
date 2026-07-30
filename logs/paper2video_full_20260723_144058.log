@@ -1,0 +1,190 @@
+[video 0000s] pipeline           [--------------------] 0/12 start paper/project-to-video build | input=inputs/papers/Automatic Video Generation.pdf out=experiments/video_output/paper2video_full_20260723_144058 api=on fps=24
+[video 0000s] ingest             [##------------------] 1/12 load source | kind=paper
+[video 0007s] ingest             [##------------------] 1/12 source loaded | title=preprint chars=62297
+[video 0007s] pipeline           [###-----------------] 2/12 run builders and judge loop
+[video 0007s] slide_builder      start initial slide generation | api=on provider=lumid max_slides=10
+[video 0007s] text_model         request chat/completions | provider=lumid model=qwen3.6-27b
+[video 0040s] text_model         response received | provider=lumid model=qwen3.6-27b
+[video 0040s] slide_builder      [##########----------] 5/10 slides ready | actual=5
+[video 0040s] subtitle_builder   [--------------------] 0/5 build timed subtitles | seconds_per_slide=22
+[video 0040s] subtitle_builder   [####################] 14/14 subtitles ready | items=14
+[video 0040s] cursor_builder     [--------------------] 0/14 build cursor plan | vlm=on
+[video 0040s] cursor_builder     [#-------------------] 1/14 ground cursor with VLM | slide=1
+[video 0040s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0044s] vlm_cursor         vision response received | model=qwen-omni
+[video 0044s] cursor_builder     [#-------------------] 1/14 VLM cursor point ready | slide=1 x=25 y=30
+[video 0044s] cursor_builder     [###-----------------] 2/14 ground cursor with VLM | slide=1
+[video 0044s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0048s] vlm_cursor         vision response received | model=qwen-omni
+[video 0048s] cursor_builder     [###-----------------] 2/14 VLM cursor fallback | slide=1 using heuristic x=48 y=36
+[video 0048s] cursor_builder     [####----------------] 3/14 ground cursor with VLM | slide=1
+[video 0048s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0135s] vlm_cursor         vision request failed | RemoteDisconnected: Remote end closed connection without response
+[video 0135s] cursor_builder     [####----------------] 3/14 VLM cursor fallback | slide=1 using heuristic x=72 y=44
+[video 0135s] cursor_builder     [######--------------] 4/14 ground cursor with VLM | slide=2
+[video 0135s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0142s] vlm_cursor         vision response received | model=qwen-omni
+[video 0142s] cursor_builder     [######--------------] 4/14 VLM cursor fallback | slide=2 using heuristic x=38 y=62
+[video 0142s] cursor_builder     [#######-------------] 5/14 ground cursor with VLM | slide=2
+[video 0142s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0147s] vlm_cursor         vision request failed | URLError: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1010)>
+[video 0147s] cursor_builder     [#######-------------] 5/14 VLM cursor fallback | slide=2 using heuristic x=66 y=70
+[video 0147s] cursor_builder     [#########-----------] 6/14 ground cursor with VLM | slide=2
+[video 0147s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0153s] vlm_cursor         vision response received | model=qwen-omni
+[video 0153s] cursor_builder     [#########-----------] 6/14 VLM cursor fallback | slide=2 using heuristic x=20 y=28
+[video 0153s] cursor_builder     [##########----------] 7/14 ground cursor with VLM | slide=3
+[video 0153s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0157s] vlm_cursor         vision response received | model=qwen-omni
+[video 0157s] cursor_builder     [##########----------] 7/14 VLM cursor fallback | slide=3 using heuristic x=48 y=36
+[video 0157s] cursor_builder     [###########---------] 8/14 ground cursor with VLM | slide=3
+[video 0157s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0161s] vlm_cursor         vision response received | model=qwen-omni
+[video 0161s] cursor_builder     [###########---------] 8/14 VLM cursor fallback | slide=3 using heuristic x=72 y=44
+[video 0161s] cursor_builder     [#############-------] 9/14 ground cursor with VLM | slide=3
+[video 0161s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0165s] vlm_cursor         vision response received | model=qwen-omni
+[video 0165s] cursor_builder     [#############-------] 9/14 VLM cursor fallback | slide=3 using heuristic x=38 y=62
+[video 0165s] cursor_builder     [##############------] 10/14 ground cursor with VLM | slide=4
+[video 0165s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0170s] vlm_cursor         vision response received | model=qwen-omni
+[video 0170s] cursor_builder     [##############------] 10/14 VLM cursor fallback | slide=4 using heuristic x=66 y=70
+[video 0170s] cursor_builder     [################----] 11/14 ground cursor with VLM | slide=4
+[video 0171s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0263s] vlm_cursor         vision request failed | TimeoutError: The read operation timed out
+[video 0263s] cursor_builder     [################----] 11/14 VLM cursor fallback | slide=4 using heuristic x=20 y=28
+[video 0263s] cursor_builder     [#################---] 12/14 ground cursor with VLM | slide=4
+[video 0292s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0296s] vlm_cursor         vision response received | model=qwen-omni
+[video 0296s] cursor_builder     [#################---] 12/14 VLM cursor fallback | slide=4 using heuristic x=48 y=36
+[video 0296s] cursor_builder     [###################-] 13/14 ground cursor with VLM | slide=5
+[video 0296s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0301s] vlm_cursor         vision response received | model=qwen-omni
+[video 0301s] cursor_builder     [###################-] 13/14 VLM cursor fallback | slide=5 using heuristic x=72 y=44
+[video 0301s] cursor_builder     [####################] 14/14 ground cursor with VLM | slide=5
+[video 0301s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0306s] vlm_cursor         vision request failed | URLError: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1010)>
+[video 0306s] cursor_builder     [####################] 14/14 VLM cursor fallback | slide=5 using heuristic x=38 y=62
+[video 0306s] cursor_builder     [####################] 14/14 cursor plan ready | points=14
+[video 0306s] talker_builder     build narration/talker plan | subtitle_items=14
+[video 0306s] talker_builder     talker plan ready | chars=2386
+[video 0306s] judge_agent        [#####---------------] 1/4 evaluate storyboard | target=0.88
+[video 0306s] text_model         request chat/completions | provider=lumid model=qwen3.6-27b
+[video 0335s] text_model         response received | provider=lumid model=qwen3.6-27b
+[video 0335s] judge_agent        [#####---------------] 1/4 judge result | score=0.200 satisfied=False next=slide_builder,subtitle_builder,cursor_builder,talker_builder
+[video 0335s] revise_builder     [#######-------------] 1/3 revise slides and downstream modules | slide_builder -> subtitle_builder -> cursor_builder -> talker_builder
+[video 0335s] text_model         request chat/completions | provider=lumid model=qwen3.6-27b
+[video 0377s] text_model         request failed | HTTPError: HTTP Error 408: Request Time-out
+[video 0377s] slide_builder      [##########----------] 5/10 revised slides ready | round=1
+[video 0377s] subtitle_builder   [####################] 17/17 rebuilt subtitles after slide revision | round=1
+[video 0377s] cursor_builder     [#-------------------] 1/17 ground cursor with VLM | slide=1
+[video 0473s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0479s] vlm_cursor         vision response received | model=qwen-omni
+[video 0479s] cursor_builder     [#-------------------] 1/17 VLM cursor point ready | slide=1 x=25 y=30
+[video 0479s] cursor_builder     [##------------------] 2/17 ground cursor with VLM | slide=1
+[video 0479s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0484s] vlm_cursor         vision response received | model=qwen-omni
+[video 0484s] cursor_builder     [##------------------] 2/17 VLM cursor fallback | slide=1 using heuristic x=48 y=36
+[video 0484s] cursor_builder     [####----------------] 3/17 ground cursor with VLM | slide=1
+[video 0484s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0489s] vlm_cursor         vision response received | model=qwen-omni
+[video 0489s] cursor_builder     [####----------------] 3/17 VLM cursor fallback | slide=1 using heuristic x=72 y=44
+[video 0489s] cursor_builder     [#####---------------] 4/17 ground cursor with VLM | slide=2
+[video 0536s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0560s] vlm_cursor         vision response received | model=qwen-omni
+[video 0560s] cursor_builder     [#####---------------] 4/17 VLM cursor fallback | slide=2 using heuristic x=38 y=62
+[video 0560s] cursor_builder     [######--------------] 5/17 ground cursor with VLM | slide=2
+[video 0560s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0581s] vlm_cursor         vision response received | model=qwen-omni
+[video 0581s] cursor_builder     [######--------------] 5/17 VLM cursor fallback | slide=2 using heuristic x=66 y=70
+[video 0581s] cursor_builder     [#######-------------] 6/17 ground cursor with VLM | slide=2
+[video 0581s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0662s] vlm_cursor         vision response received | model=qwen-omni
+[video 0662s] cursor_builder     [#######-------------] 6/17 VLM cursor fallback | slide=2 using heuristic x=20 y=28
+[video 0662s] cursor_builder     [########------------] 7/17 ground cursor with VLM | slide=2
+[video 0662s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0755s] vlm_cursor         vision request failed | TimeoutError: The read operation timed out
+[video 0755s] cursor_builder     [########------------] 7/17 VLM cursor fallback | slide=2 using heuristic x=48 y=36
+[video 0755s] cursor_builder     [#########-----------] 8/17 ground cursor with VLM | slide=3
+[video 0758s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0765s] vlm_cursor         vision response received | model=qwen-omni
+[video 0765s] cursor_builder     [#########-----------] 8/17 VLM cursor fallback | slide=3 using heuristic x=72 y=44
+[video 0765s] cursor_builder     [###########---------] 9/17 ground cursor with VLM | slide=3
+[video 0765s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0770s] vlm_cursor         vision response received | model=qwen-omni
+[video 0770s] cursor_builder     [###########---------] 9/17 VLM cursor fallback | slide=3 using heuristic x=38 y=62
+[video 0770s] cursor_builder     [############--------] 10/17 ground cursor with VLM | slide=3
+[video 0770s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0782s] vlm_cursor         vision response received | model=qwen-omni
+[video 0782s] cursor_builder     [############--------] 10/17 VLM cursor fallback | slide=3 using heuristic x=66 y=70
+[video 0782s] cursor_builder     [#############-------] 11/17 ground cursor with VLM | slide=4
+[video 0786s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0790s] vlm_cursor         vision response received | model=qwen-omni
+[video 0790s] cursor_builder     [#############-------] 11/17 VLM cursor fallback | slide=4 using heuristic x=20 y=28
+[video 0790s] cursor_builder     [##############------] 12/17 ground cursor with VLM | slide=4
+[video 0790s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0794s] vlm_cursor         vision response received | model=qwen-omni
+[video 0794s] cursor_builder     [##############------] 12/17 VLM cursor fallback | slide=4 using heuristic x=48 y=36
+[video 0794s] cursor_builder     [###############-----] 13/17 ground cursor with VLM | slide=4
+[video 0794s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0802s] vlm_cursor         vision response received | model=qwen-omni
+[video 0802s] cursor_builder     [###############-----] 13/17 VLM cursor fallback | slide=4 using heuristic x=72 y=44
+[video 0802s] cursor_builder     [################----] 14/17 ground cursor with VLM | slide=4
+[video 0802s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0895s] vlm_cursor         vision request failed | TimeoutError: The read operation timed out
+[video 0895s] cursor_builder     [################----] 14/17 VLM cursor fallback | slide=4 using heuristic x=38 y=62
+[video 0895s] cursor_builder     [##################--] 15/17 ground cursor with VLM | slide=5
+[video 0905s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0910s] vlm_cursor         vision response received | model=qwen-omni
+[video 0910s] cursor_builder     [##################--] 15/17 VLM cursor fallback | slide=5 using heuristic x=66 y=70
+[video 0910s] cursor_builder     [###################-] 16/17 ground cursor with VLM | slide=5
+[video 0910s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0915s] vlm_cursor         vision response received | model=qwen-omni
+[video 0915s] cursor_builder     [###################-] 16/17 VLM cursor fallback | slide=5 using heuristic x=20 y=28
+[video 0915s] cursor_builder     [####################] 17/17 ground cursor with VLM | slide=5
+[video 0915s] vlm_cursor         request vision grounding | model=qwen-omni
+[video 0919s] vlm_cursor         vision response received | model=qwen-omni
+[video 0919s] cursor_builder     [####################] 17/17 VLM cursor fallback | slide=5 using heuristic x=48 y=36
+[video 0919s] cursor_builder     [####################] 17/17 rebuilt cursor plan after slide revision | round=1
+[video 0919s] talker_builder     rebuilt talker plan after slide revision | round=1
+[video 0919s] judge_agent        [##########----------] 2/4 evaluate storyboard | target=0.88
+[video 0919s] text_model         request chat/completions | provider=lumid model=qwen3.6-27b
+[video 0953s] text_model         response received | provider=lumid model=qwen3.6-27b
+[video 0953s] judge_agent        [##########----------] 2/4 judge result | score=1.000 satisfied=True next=none
+[video 0953s] pipeline           [########------------] 5/12 generate slide images
+[video 0953s] image_builder      [--------------------] 0/5 start slide visual generation | api=on model=qwen-image
+[video 0953s] image_builder      [####----------------] 1/5 calling image model | slide=1 title=1. Motivation
+[video 0953s] image_api          request image generation | model=qwen-image size=1280x720
+[video 1030s] image_api          image response received | ok=True path=slide_01.png
+[video 1030s] image_builder      [####----------------] 1/5 image done | slide=1 path=slide_01.png error=
+[video 1030s] image_builder      [########------------] 2/5 calling image model | slide=2 title=2. Core Idea
+[video 1030s] image_api          request image generation | model=qwen-image size=1280x720
+[video 1105s] image_api          image response received | ok=True path=slide_02.png
+[video 1105s] image_builder      [########------------] 2/5 image done | slide=2 path=slide_02.png error=
+[video 1105s] image_builder      [############--------] 3/5 calling image model | slide=3 title=3. Workflow
+[video 1105s] image_api          request image generation | model=qwen-image size=1280x720
+[video 1110s] image_api          image request failed | URLError: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1010)>
+[video 1110s] image_builder      [############--------] 3/5 image failed | slide=3 path= error=URLError: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1010)>
+[video 1110s] image_builder      [################----] 4/5 calling image model | slide=4 title=4. Evidence
+[video 1110s] image_api          request image generation | model=qwen-image size=1280x720
+[video 1187s] image_api          image response received | ok=True path=slide_04.png
+[video 1187s] image_builder      [################----] 4/5 image done | slide=4 path=slide_04.png error=
+[video 1187s] image_builder      [####################] 5/5 calling image model | slide=5 title=5. Limitations
+[video 1187s] image_api          request image generation | model=qwen-image size=1280x720
+[video 1268s] image_api          image response received | ok=True path=slide_05.png
+[video 1268s] image_builder      [####################] 5/5 image done | slide=5 path=slide_05.png error=
+[video 1268s] image_builder      [####################] 5/5 finished slide visual generation | ok=4/5
+[video 1268s] pipeline           [##########----------] 6/12 write storyboard artifacts
+[video 1268s] pipeline           [############--------] 7/12 synthesize narration audio
+[video 1268s] tts_builder        request speech synthesis | model=qwen-tts chars=2776
+[video 1378s] tts_builder        speech synthesis failed | RemoteDisconnected: Remote end closed connection without response
+[video 1405s] pipeline           [#############-------] 8/12 write final artifacts
+[video 1405s] preview            [###############-----] 9/12 write HTML preview | experiments/video_output/paper2video_full_20260723_144058/preview.html
+[video 1405s] pipeline           [#################---] 10/12 render MP4 video | experiments/video_output/paper2video_full_20260723_144058/video.mp4
+[video 1405s] renderer           [--------------------] 0/5 start frame rendering | style=arbor fps=24
+[video 1405s] renderer           [####----------------] 1/5 draw slide frames | slide=1 frames=600
+[video 1544s] renderer           [########------------] 2/5 draw slide frames | slide=2 frames=504
+[video 1583s] renderer           [############--------] 3/5 draw slide frames | slide=3 frames=696
+[video 1651s] renderer           [################----] 4/5 draw slide frames | slide=4 frames=576
+[video 1708s] renderer           [####################] 5/5 draw slide frames | slide=5 frames=576
+[video 1923s] renderer           start ffmpeg encoding | frames=2952 fps=24 out=video.mp4

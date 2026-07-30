@@ -1,0 +1,11 @@
+{
+  "text_ok": true,
+  "text_prefix": "{\"ok\": true, \"component\": \"text\"}",
+  "image_ok": true,
+  "image_path": "/Users/muj666/Desktop/auto/experiments/lumid_api_probe_20260722/qwen_image_probe.png",
+  "tts_ok": true,
+  "tts_path": "/Users/muj666/Desktop/auto/experiments/lumid_api_probe_20260722/narration.mp3",
+  "tts_error": "",
+  "omni_ok": false,
+  "omni_prefix": ""
+}

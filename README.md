@@ -142,9 +142,10 @@ auto-research video build \
 For DeepSeek-compatible text generation:
 
 ```bash
-export OPENAI_API_KEY="YOUR_KEY"
-export OPENAI_BASE_URL="https://api.deepseek.com"
-export OPENAI_MODEL="deepseek-chat"
+export DEEPSEEK_API_KEY="YOUR_KEY"
+export DEEPSEEK_BASE_URL="https://api.deepseek.com"
+export DEEPSEEK_MODEL="deepseek-chat"
+export AUTO_VIDEO_RENDER_STYLE="arbor"
 ```
 
 Main outputs:
@@ -182,6 +183,50 @@ More details:
 - `docs/PAPER_PROJECT_TO_VIDEO_IMPLEMENTATION_CN.md`
 - `docs/CURRENT_PROGRESS_AND_LIMITATIONS_CN.md`
 - `paper_project_video_mvp/README.md`
+
+### Research-agent comparison demo
+
+Lightweight implementations inspired by AI Scientist-v2, AI Co-Scientist, PaperBench, and Hugging Face ML Intern:
+
+```bash
+auto-research run --cwd . -e experiments/_demo_ai_scientist_lite.yaml
+auto-research run --cwd . -e experiments/_demo_co_scientist_lite.yaml
+auto-research run --cwd . -e experiments/_demo_paperbench_lite.yaml
+auto-research run --cwd . -e experiments/_demo_ml_intern_lite.yaml
+auto-research review --cwd . -e experiments/_demo_ai_scientist_lite.yaml
+auto-research review --cwd . -e experiments/_demo_co_scientist_lite.yaml
+auto-research review --cwd . -e experiments/_demo_paperbench_lite.yaml
+auto-research review --cwd . -e experiments/_demo_ml_intern_lite.yaml
+auto-research visualize --cwd .
+auto-research compare-systems --cwd .
+```
+
+Outputs for reporting:
+
+- `experiments/agent_output/review_*.md`
+- `experiments/agent_output/vast_demo_dashboard.html`
+- `docs/comparison_auto_research_agents.md`
+- `docs/AUTO_RESEARCH_AGENT_REPORT_CN.md`
+
+### Specific auto-system demo: control optimization
+
+AutoTune-Control is a specific control-system optimization demo inspired by recent automated-system work such as ADAS/meta-agent search, LLM-agent robot control, autonomous network optimization, and PID autotuning.
+
+```bash
+auto-research run --cwd . -e experiments/_demo_control_autotune.yaml --brief
+auto-research review --cwd . -e experiments/_demo_control_autotune.yaml
+open experiments/agent_output/control_autotune_dashboard.html
+```
+
+Vast deployment after manually renting a server:
+
+```bash
+auto-research vast push --cwd . \
+  --ssh "ssh -p <PORT> root@<HOST>" \
+  -e experiments/_demo_control_autotune.yaml
+```
+
+See `docs/AUTO_SYS_CONTROL_OPTIMIZATION_CN.md` and `docs/RUN_CONTROL_AUTOTUNE_CN.md`.
 
 ## GitHub Actions
 

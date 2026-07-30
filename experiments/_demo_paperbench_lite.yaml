@@ -1,0 +1,19 @@
+# Vast-friendly demo: compact version of OpenAI PaperBench style rubric scoring.
+name: demo_paperbench_lite
+description: Lightweight PaperBench-style loop with paper understanding, code reproduction, rubric score, and artifact completeness.
+hypothesis: "A paper-to-code replication task can be reduced to a rubric-style scorecard over runnable artifacts."
+governance_phase: review
+command:
+  - python
+  - scripts/demos/research_agent_lite_demo.py
+  - --mode
+  - paperbench-lite
+  - --metrics-path
+  - metrics.json
+metrics_path: metrics.json
+success_threshold:
+  paper_understanding: 0.80
+  code_reproduction: 0.80
+  rubric_score: 0.80
+  artifact_completeness: 0.85
+  replication_subtasks: 5

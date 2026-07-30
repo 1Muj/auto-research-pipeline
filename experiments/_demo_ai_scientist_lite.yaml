@@ -1,0 +1,18 @@
+# Vast-friendly demo: compact version of AI Scientist style loop.
+name: demo_ai_scientist_lite
+description: Lightweight AI Scientist-style loop with hypothesis, experiment, review, visualization metrics.
+hypothesis: "A small automated loop can produce inspectable metrics and reviewer recommendations after a Vast run."
+governance_phase: review
+command:
+  - python
+  - scripts/demos/research_agent_lite_demo.py
+  - --mode
+  - ai-scientist-lite
+  - --metrics-path
+  - metrics.json
+metrics_path: metrics.json
+success_threshold:
+  hypothesis_quality: 0.80
+  experiment_success: 1.0
+  reviewer_score: 0.80
+  visualization_ready: 1.0

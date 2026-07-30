@@ -1,0 +1,19 @@
+# Vast-friendly demo: compact version of Google AI Co-Scientist style loop.
+name: demo_co_scientist_lite
+description: Lightweight Co-Scientist-style loop with hypothesis generation, critique, ranking, and human-in-loop readiness.
+hypothesis: "A multi-agent hypothesis loop can be represented as measurable generation, critique, ranking, and human review signals."
+governance_phase: review
+command:
+  - python
+  - scripts/demos/research_agent_lite_demo.py
+  - --mode
+  - co-scientist-lite
+  - --metrics-path
+  - metrics.json
+metrics_path: metrics.json
+success_threshold:
+  hypothesis_generation_score: 0.85
+  multi_agent_critique_score: 0.80
+  ranking_confidence: 0.80
+  human_in_loop_ready: 1.0
+  candidate_hypotheses: 3

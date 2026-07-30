@@ -1,0 +1,55 @@
+{
+  "experiment": "demo_project_to_video",
+  "run_id": "demo_project_to_video_151eebd1",
+  "thresholds_passed": true,
+  "threshold_detail": {
+    "judge_overall_score": {
+      "pass": true,
+      "value": 1.0,
+      "bound": 0.6,
+      "direction": "maximize"
+    },
+    "revision_rounds": {
+      "pass": true,
+      "value": 1.0,
+      "bound": 1.0,
+      "direction": "maximize"
+    },
+    "slide_count": {
+      "pass": true,
+      "value": 5.0,
+      "bound": 4.0,
+      "direction": "maximize"
+    },
+    "subtitle_count": {
+      "pass": true,
+      "value": 15.0,
+      "bound": 4.0,
+      "direction": "maximize"
+    }
+  },
+  "metrics": {
+    "judge_overall_score": 1.0,
+    "target_score": 0.9,
+    "satisfied": true,
+    "revision_rounds": 1,
+    "max_revisions": 3,
+    "min_revisions": 1,
+    "coverage_score": 1.0,
+    "length_score": 1.0,
+    "visual_sync_score": 1.0,
+    "slide_count": 5,
+    "subtitle_count": 15,
+    "estimated_duration_sec": 104,
+    "api_used": false,
+    "talker_api_ready": false,
+    "video_rendered": true,
+    "video_path": "/Users/muj666/Desktop/auto/experiments/video_output/project_demo/video.mp4",
+    "preview_path": "/Users/muj666/Desktop/auto/experiments/video_output/project_demo/preview.html",
+    "storyboard_path": "/Users/muj666/Desktop/auto/experiments/video_output/project_demo/storyboard.json",
+    "flowmesh_spec_path": "/Users/muj666/Desktop/auto/experiments/video_output/project_demo/flowmesh_spec.json",
+    "revision_history_path": "/Users/muj666/Desktop/auto/experiments/video_output/project_demo/revision_history.json",
+    "duration_sec": 28.8575,
+    "exit_code": 0
+  }
+}

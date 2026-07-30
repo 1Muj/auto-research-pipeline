@@ -3,12 +3,46 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from typer.testing import CliRunner
+from auto_research.video_pipeline import _text_model_provider, build_slides
 
-from auto_research.cli import app
+
+def test_video_pipeline_prefers_deepseek_provider(monkeypatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    assert _text_model_provider() == "deepseek"
+
+
+def test_video_slide_builder_adds_rich_visual_types() -> None:
+    source = {
+        "kind": "paper",
+        "title": "Rich Visual Demo",
+        "source_path": "demo.md",
+        "text": (
+            "This project creates screenshots, evidence tables, cursor plans, talker inputs, "
+            "judge feedback, and rendered video artifacts. The workflow ingests source material, "
+            "builds a storyboard, reviews coverage, revises weak modules, and renders an MP4 demo."
+        ),
+        "files": [],
+    }
+
+    slides = build_slides(source, max_slides=5, use_api=False)
+
+    assert [slide["visual_kind"] for slide in slides] == [
+        "image",
+        "screenshot",
+        "flow",
+        "table",
+        "metrics",
+    ]
+    assert all(slide["visual_caption"] for slide in slides)
+    assert slides[3]["visual_table"][0] == ["Signal", "Source cue", "Presentation use"]
 
 
 def test_video_build_cli_writes_artifacts(tmp_path: Path) -> None:
+    from auto_research.cli import app
+    from typer.testing import CliRunner
+
     source = tmp_path / "sample.md"
     source.write_text(
         """

@@ -1,0 +1,67 @@
+
+
+# --- 0） ---
+conda deactivate
+
+# --- 1）进入仓库 ---
+cd /Users/muj666/Desktop/auto
+
+# --- 2）激活虚拟环境 ---
+source .venv/bin/activate
+
+# --- 3）Mac + Python 3.14：保证 auto-research 能 import（装过可再执行一次无妨）---
+bash scripts/ensure_auto_research_on_path.sh
+
+# --- 4）看 CLI 有哪些子命令 ---
+auto-research --help
+
+# --- 5）门禁：只检查 YAML / 契约（不跑训练）---
+auto-research preflight -e experiments/demo_smoke.yaml
+
+# --- 6）一条命令：preflight → run → retro（只跑 demo_smoke，和 CI 一致）---
+# 终端窄时单行 JSON 仍会折行像「重复」→ 演示推荐加 --brief（多行短摘要）
+auto-research cycle --cwd . -e experiments/demo_smoke.yaml --last 5 --brief
+
+# --- 7）（可选）完整 JSON：紧凑一行 或 缩进 --pretty ---
+auto-research cycle --cwd . -e experiments/demo_smoke.yaml --last 5
+auto-research cycle --cwd . -e experiments/demo_smoke.yaml --last 5 --pretty
+
+# --- 8）顺序跑完 experiments 下所有 demo_*.yaml（跳过 _ 开头模板），末尾一次 retro ---
+# 会包含 demo_threshold_miss（阈值故意不过），Summary 里会出现「x/y 通过」
+auto-research cycle --cwd . --last 15 --brief
+
+# --- 9）（可选）只演示「阈值失败」那一条 ---
+auto-research cycle --cwd . -e experiments/demo_threshold_miss.yaml --last 8 --brief
+
+# --- 10）（可选）分步跑（和 cycle 二选一演示即可）---
+auto-research preflight -e experiments/demo_smoke.yaml
+auto-research run --cwd . -e experiments/demo_smoke.yaml
+auto-research retro --last 5
+
+# --- 11）只看 retro（不重新跑实验）---
+auto-research retro --cwd . --last 15
+
+# --- 12）演示完在资源管理器 / Cursor 里打开（run_id 以你本机最新为准）---
+# experiments/runs/              ← 各 demo_*_<hash>/ 下有 manifest.json、metrics.json
+# experiments/feedback/          ← *_feedback.json，看 thresholds_passed
+# experiments/demo_smoke.yaml
+# experiments/demo_threshold_miss.yaml
+# .claude/commands/research-office-hours.md   ← Think 提示词（给教授看）
+# docs/RESEARCH_GOVERNANCE.md
+
+# --- 13）API / 密钥占位（有接口或 key 后再做；暂无可跳过）---
+cp deploy/api.env.example deploy/api.env
+# 用编辑器打开 deploy/api.env，填写 ANTHROPIC_API_KEY、VAST_API_KEY、OPENAI_*、CUSTOM_INFERENCE_* 等（勿提交该文件）
+source scripts/load_api_env.sh
+
+# --- 14）部署（按顺序；路径按你的机器改）---
+chmod +x one_click.sh scripts/*.sh
+./one_click.sh local
+pip install vastai
+./one_click.sh vast
+# SSH 进 Vast 实例后：
+# bash scripts/setup_github_runner.sh YOUR_ORG/YOUR_REPO
+# GitHub 仓库 → Actions → GPU Research → Run workflow
+
+
+我想要让Claude code 直接管理整个项目 然后Claude code直接部署到vast..ai的服务器上面 之后得到结果再作为输入给到Claude code 再次运行项目完善 如此循环

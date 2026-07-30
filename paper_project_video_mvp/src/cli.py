@@ -8,13 +8,8 @@ from typing import Any
 import typer
 
 from auto_research import __version__
-from auto_research.agent_loop import run_agent_turn
 from auto_research.config import PipelineConfig
-from auto_research.pipeline import ResearchPipeline
-from auto_research.preflight import preflight_experiment
-from auto_research.retro import retro_markdown
-from auto_research.reviewer import write_comparison, write_review, write_visualization
-from auto_research.video.pipeline import run_video_pipeline
+from auto_research.video_prompt_eval import run_prompt_evaluation
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
@@ -138,15 +133,32 @@ def video_build_cmd(
     use_api: bool = typer.Option(
         False,
         "--use-api",
-        help="Use OPENAI-compatible API if OPENAI_API_KEY is set; otherwise heuristic fallback",
+        help="Use DeepSeek/OpenAI-compatible API if DEEPSEEK_API_KEY or OPENAI_API_KEY is set; otherwise heuristic fallback",
     ),
     use_vlm_cursor: bool = typer.Option(
         False,
         "--use-vlm-cursor",
         help="Use a vision model to ground cursor points when OPENAI_VISION_* is configured",
     ),
+    use_omni_cursor: bool = typer.Option(
+        False,
+        "--use-omni-cursor",
+        help="Use Lumid qwen-omni for cursor/highlight grounding when LUM_API_KEY is configured",
+    ),
+    use_image_api: bool = typer.Option(
+        False,
+        "--use-image-api",
+        help="Use Lumid qwen-image to generate slide visual assets",
+    ),
+    use_tts: bool = typer.Option(
+        False,
+        "--use-tts",
+        help="Use Lumid qwen-tts to synthesize narration audio and mux it into the MP4",
+    ),
 ) -> None:
     """Build slides, subtitles, cursor plan, judge feedback, FlowMesh spec, and HTML preview."""
+    from auto_research.video.pipeline import run_video_pipeline
+
     root = PipelineConfig().resolved(cwd).root
     inp = input_path if input_path.is_absolute() else root / input_path
     out = out_dir if out_dir.is_absolute() else root / out_dir
@@ -162,6 +174,9 @@ def video_build_cmd(
         min_revisions=min_revisions,
         fps=fps,
         use_vlm_cursor=use_vlm_cursor,
+        use_omni_cursor=use_omni_cursor,
+        use_image_api=use_image_api,
+        use_tts=use_tts,
     )
     typer.echo(typer.style(f"Video preview: {result.preview_path}", fg=typer.colors.CYAN))
     typer.echo(typer.style(f"MP4 video: {result.video_path}", fg=typer.colors.CYAN))
@@ -175,7 +190,7 @@ def video_demo_cmd(
     use_api: bool = typer.Option(
         False,
         "--use-api",
-        help="Use OPENAI-compatible API if configured",
+        help="Use DeepSeek/OpenAI-compatible API if configured",
     ),
     target_score: float = typer.Option(0.9, "--target-score", help="Judge score needed to stop"),
     max_revisions: int = typer.Option(3, "--max-revisions", help="Maximum revise rounds"),
@@ -186,8 +201,25 @@ def video_demo_cmd(
         "--use-vlm-cursor",
         help="Use a vision model to ground cursor points when OPENAI_VISION_* is configured",
     ),
+    use_omni_cursor: bool = typer.Option(
+        False,
+        "--use-omni-cursor",
+        help="Use Lumid qwen-omni for cursor/highlight grounding when LUM_API_KEY is configured",
+    ),
+    use_image_api: bool = typer.Option(
+        False,
+        "--use-image-api",
+        help="Use Lumid qwen-image to generate slide visual assets",
+    ),
+    use_tts: bool = typer.Option(
+        False,
+        "--use-tts",
+        help="Use Lumid qwen-tts to synthesize narration audio and mux it into the MP4",
+    ),
 ) -> None:
     """Run both built-in paper and project video demos."""
+    from auto_research.video.pipeline import run_video_pipeline
+
     root = PipelineConfig().resolved(cwd).root
     demos = [
         (
@@ -212,9 +244,86 @@ def video_demo_cmd(
             min_revisions=min_revisions,
             fps=fps,
             use_vlm_cursor=use_vlm_cursor,
+            use_omni_cursor=use_omni_cursor,
+            use_image_api=use_image_api,
+            use_tts=use_tts,
         )
         typer.echo(typer.style(f"{kind} preview: {result.preview_path}", fg=typer.colors.CYAN))
         typer.echo(typer.style(f"{kind} mp4: {result.video_path}", fg=typer.colors.CYAN))
+
+
+@video_app.command("prompt-eval")
+def video_prompt_eval_cmd(
+    examples: Path | None = typer.Option(
+        None,
+        "--examples",
+        "-e",
+        help=(
+            "JSON file with your high/low/score calibration examples; "
+            "default uses built-in anchors"
+        ),
+    ),
+    artifact_dir: Path = typer.Option(
+        ...,
+        "--artifact-dir",
+        "-a",
+        help="Video artifact directory containing storyboard.json, slides.md, metrics.json, etc.",
+    ),
+    out: Path = typer.Option(
+        Path("experiments/video_output/prompt_eval_report.json"),
+        "--out",
+        "-o",
+        help="Where to write the learned rubric, judge prompt, and evaluation report",
+    ),
+    cwd: Path | None = typer.Option(None, "--cwd", help="Project root"),
+    transcript: Path | None = typer.Option(
+        None,
+        "--transcript",
+        help="Optional transcript text from the real PPT/video audio",
+    ),
+    standard: str = typer.Option(
+        "",
+        "--standard",
+        help="Extra user scoring standard to merge into the learned rubric",
+    ),
+    use_api: bool = typer.Option(
+        False,
+        "--use-api",
+        help="Use OPENAI-compatible API to learn the rubric and score the artifact",
+    ),
+) -> None:
+    """Learn a user-specific judge prompt from labeled examples, then evaluate an artifact."""
+    root = PipelineConfig().resolved(cwd).root
+    examples_path = None
+    if examples:
+        examples_path = examples if examples.is_absolute() else root / examples
+    else:
+        default_examples = root / "examples" / "ppt_video_calibration_examples.json"
+        if default_examples.is_file():
+            examples_path = default_examples
+    artifact_path = artifact_dir if artifact_dir.is_absolute() else root / artifact_dir
+    out_path = out if out.is_absolute() else root / out
+    transcript_path = None
+    if transcript:
+        transcript_path = transcript if transcript.is_absolute() else root / transcript
+    report = run_prompt_evaluation(
+        examples_path,
+        artifact_path,
+        out_path=out_path,
+        use_api=use_api,
+        transcript_path=transcript_path,
+        extra_standard=standard,
+    )
+    evaluation = report["evaluation"]
+    typer.echo(typer.style(f"Prompt evaluation report: {out_path}", fg=typer.colors.CYAN))
+    typer.echo(
+        typer.style(
+            f"Classification: {evaluation.get('classification')} | "
+            f"Score: {evaluation.get('overall_score')} | "
+            f"Confidence: {evaluation.get('confidence')}",
+            fg=typer.colors.GREEN,
+        )
+    )
 
 
 app.add_typer(video_app, name="video")
@@ -242,6 +351,8 @@ def run_cmd(
     ),
 ) -> None:
     """Run one experiment file or all experiments under experiments/."""
+    from auto_research.pipeline import ResearchPipeline
+
     pipe = ResearchPipeline(base=cwd)
     root = pipe.cfg.root
     if experiment:
@@ -258,6 +369,8 @@ def run_cmd(
 
 
 def _preflight_or_exit(experiment: Path, cwd: Path | None) -> None:
+    from auto_research.preflight import preflight_experiment
+
     errs, warns = preflight_experiment(experiment, cwd)
     for w in warns:
         typer.echo(typer.style(w, fg=typer.colors.YELLOW))
@@ -313,6 +426,9 @@ def cycle_cmd(
     ),
 ) -> None:
     """Preflight → run for one or all experiment YAMLs, then print retro once at the end."""
+    from auto_research.pipeline import ResearchPipeline
+    from auto_research.retro import retro_markdown
+
     cfg = PipelineConfig().resolved(cwd)
     if experiment is not None:
         paths = [experiment]
@@ -375,6 +491,8 @@ def agent_cmd(
     ),
 ) -> None:
     """Run one experiment, read feedback, write a markdown brief for Claude Code / human."""
+    from auto_research.agent_loop import run_agent_turn
+
     code, report, perr = run_agent_turn(
         experiment,
         cwd,
@@ -422,6 +540,8 @@ def retro_cmd(
     cwd: Path | None = typer.Option(None, "--cwd", help="Project root"),
 ) -> None:
     """Print a markdown retro from recent experiments/feedback/*.json."""
+    from auto_research.retro import retro_markdown
+
     cfg = PipelineConfig().resolved(cwd)
     typer.echo(retro_markdown(cfg, last))
 
@@ -442,6 +562,8 @@ def review_cmd(
     ),
 ) -> None:
     """Write a lightweight reviewer/critic brief from metrics and feedback."""
+    from auto_research.reviewer import write_review
+
     cfg = PipelineConfig().resolved(cwd)
     out = write_review(experiment, cfg, out_dir=out_dir)
     typer.echo(typer.style(f"Review brief: {out}", fg=typer.colors.CYAN))
@@ -458,6 +580,8 @@ def visualize_cmd(
     limit: int = typer.Option(20, "--limit", help="Most recent feedback files to include"),
 ) -> None:
     """Generate a standalone HTML dashboard from run/feedback artifacts."""
+    from auto_research.reviewer import write_visualization
+
     cfg = PipelineConfig().resolved(cwd)
     written = write_visualization(cfg, out=out, limit=limit)
     typer.echo(typer.style(f"Dashboard: {written}", fg=typer.colors.CYAN))
@@ -473,6 +597,8 @@ def compare_systems_cmd(
     ),
 ) -> None:
     """Write a markdown comparison with AI Scientist, Co-Scientist, PaperBench, and ML Intern."""
+    from auto_research.reviewer import write_comparison
+
     cfg = PipelineConfig().resolved(cwd)
     written = write_comparison(cfg, out=out)
     typer.echo(typer.style(f"Comparison: {written}", fg=typer.colors.CYAN))

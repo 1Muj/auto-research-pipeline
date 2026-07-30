@@ -1,0 +1,44 @@
+{
+  "examples": [
+    {
+      "id": "high_grounded_clear",
+      "label": "high",
+      "score": 8.8,
+      "summary": "A five-slide research explainer with a clear problem, method, evidence, and limitation arc.",
+      "transcript": "The presenter introduces the problem, defines the core idea, walks through the workflow, and ties each claim back to source evidence.",
+      "slides": [
+        "Motivation: why paper-to-video generation needs inspectable intermediate artifacts.",
+        "Workflow: ingest source, build slides, create subtitles, ground cursor, judge and revise."
+      ],
+      "strengths": [
+        "Narration matches the active slide.",
+        "Claims are grounded in source material.",
+        "Revision advice is specific."
+      ],
+      "weaknesses": [
+        "Audio quality was not independently inspected."
+      ],
+      "why": "This should be high because the explanation is coherent, grounded, and easy to revise."
+    },
+    {
+      "id": "low_misaligned_vague",
+      "label": "low",
+      "score": 3.0,
+      "summary": "A deck with generic bullets and narration that repeatedly discusses content not shown on screen.",
+      "transcript": "The presenter makes broad claims about performance and deployment without showing evidence or explaining the workflow.",
+      "slides": [
+        "Overview: AI system.",
+        "Results: it works well."
+      ],
+      "strengths": [
+        "The deck has a basic structure."
+      ],
+      "weaknesses": [
+        "Narration does not match the slide content.",
+        "Key claims have no evidence.",
+        "Feedback would not tell a generator what to fix."
+      ],
+      "why": "This should be low because polish cannot compensate for weak grounding and slide-narration mismatch."
+    }
+  ]
+}
