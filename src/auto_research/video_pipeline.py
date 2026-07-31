@@ -1279,18 +1279,48 @@ def sanitize_public_subtitles(subtitles: list[dict[str, Any]]) -> list[dict[str,
     return sanitized
 
 
+def _estimate_narration_duration(text: Any) -> int:
+    clean = _clean_display_text(text)
+    english_words = re.findall(r"[A-Za-z0-9]+(?:['-][A-Za-z0-9]+)*", clean)
+    cjk_chars = re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]", clean)
+    speech_wpm = max(80.0, float(os.environ.get("AUTO_VIDEO_SPEECH_WPM", "140")))
+    cjk_chars_per_sec = max(2.5, float(os.environ.get("AUTO_VIDEO_CJK_CHARS_PER_SEC", "4.0")))
+    seconds = len(english_words) / (speech_wpm / 60.0)
+    seconds += len(cjk_chars) / cjk_chars_per_sec
+    seconds += min(1.8, len(re.findall(r"[,;:，；：]", clean)) * 0.12)
+    seconds += min(2.4, len(re.findall(r"[.!?。！？]", clean)) * 0.22)
+    minimum = max(3, int(os.environ.get("AUTO_VIDEO_MIN_BEAT_SEC", "5")))
+    maximum = max(minimum, int(os.environ.get("AUTO_VIDEO_MAX_BEAT_SEC", "15")))
+    return max(minimum, min(maximum, int(math.ceil(seconds))))
+
+
+def _narration_duration_bounds(slide: dict[str, Any], slide_position: int) -> tuple[int, int]:
+    visual_kind = str(slide.get("visual_kind") or "image").lower()
+    bounds = {
+        "flow": (8, 12),
+        "table": (8, 15),
+        "metrics": (6, 8),
+        "image": (6, 10),
+    }
+    minimum, maximum = bounds.get(visual_kind, (5, 10))
+    if slide_position == 1:
+        minimum = max(minimum, 6)
+        maximum = min(maximum, 8)
+    return minimum, max(minimum, maximum)
+
+
 def build_subtitles(slides: list[dict[str, Any]], *, seconds_per_slide: int) -> list[dict[str, Any]]:
     subtitles: list[dict[str, Any]] = []
     t = 0
     max_sentences = int(os.environ.get("AUTO_VIDEO_MAX_SUBTITLES_PER_SLIDE", "4"))
     continuous = os.environ.get("AUTO_VIDEO_CONTINUOUS_TIMELINE", "1").strip().lower() not in {"0", "false", "no"}
-    for slide in slides:
+    for slide_position, slide in enumerate(slides, start=1):
         note = slide.get("speaker_note") or " ".join(slide.get("bullets") or [])
         sentences = _sentences(note) or [note]
+        minimum_duration, maximum_duration = _narration_duration_bounds(slide, slide_position)
         for sent in sentences[:max_sentences]:
             start = t
-            word_count = max(1, len(str(sent).split()))
-            duration = max(4, min(14, round(word_count / 2.6)))
+            duration = max(minimum_duration, min(maximum_duration, _estimate_narration_duration(sent)))
             subtitles.append(
                 {
                     "slide_index": slide["index"],
@@ -1334,15 +1364,24 @@ def build_scene_timeline(
             ]
 
         beats: list[dict[str, Any]] = []
+        min_shot_sec = max(4.0, float(os.environ.get("AUTO_VIDEO_MIN_SHOT_SEC", "5")))
+        split_threshold_sec = max(
+            min_shot_sec * 2.0,
+            float(os.environ.get("AUTO_VIDEO_SPLIT_BEAT_SEC", "12")),
+        )
         if len(items) == 1:
             item = items[0]
             start = float(item.get("start_sec") or 0)
             end = max(start + 2.0, float(item.get("end_sec") or start + 8.0))
-            split = start + (end - start) * 0.38
-            beats = [
-                {**item, "start_sec": start, "end_sec": split, "synthetic_beat": "setup"},
-                {**item, "start_sec": split, "end_sec": end, "synthetic_beat": "explain"},
-            ]
+            duration = end - start
+            if duration >= split_threshold_sec:
+                split = max(start + min_shot_sec, min(end - min_shot_sec, start + duration * 0.42))
+                beats = [
+                    {**item, "start_sec": start, "end_sec": split, "synthetic_beat": "setup"},
+                    {**item, "start_sec": split, "end_sec": end, "synthetic_beat": "explain"},
+                ]
+            else:
+                beats = [{**item, "start_sec": start, "end_sec": end}]
         else:
             beats = items[:4]
 
@@ -1370,6 +1409,12 @@ def build_scene_timeline(
 
             focus_index = min(beat_index, max(0, len(bullets) - 1))
             focus_text = bullets[focus_index] if bullets else _clean_display_text(beat.get("text"))
+            duration = end - start
+            animation_sec = min(3.2, max(1.0, duration * 0.34))
+            minimum_hold_sec = min(3.0, max(1.5, duration * 0.28))
+            if animation_sec + minimum_hold_sec > duration:
+                animation_sec = max(0.8, duration - minimum_hold_sec)
+            hold_sec = max(0.0, duration - animation_sec)
             timeline.append(
                 {
                     "shot_id": f"s{slide_index:02d}-{beat_index + 1:02d}",
@@ -1378,6 +1423,8 @@ def build_scene_timeline(
                     "start_sec": round(start, 3),
                     "end_sec": round(end, 3),
                     "duration_sec": round(end - start, 3),
+                    "animation_sec": round(animation_sec, 3),
+                    "hold_sec": round(hold_sec, 3),
                     "shot_type": shot_type,
                     "headline": _clean_display_text(slide.get("title")),
                     "section_label": _clean_display_text(slide.get("purpose")) or f"Part {slide_index}",
@@ -3205,7 +3252,10 @@ def _draw_scene_composition(
     local: float,
     fonts: dict[str, Any],
 ) -> None:
-    reveal = _scene_ease(min(1.0, local / 0.36))
+    duration = max(0.001, float(shot.get("duration_sec") or 1.0))
+    animation_sec = max(0.001, float(shot.get("animation_sec") or duration * 0.34))
+    animation_fraction = max(0.001, min(1.0, animation_sec / duration))
+    reveal = _scene_ease(min(1.0, local / animation_fraction))
     y_shift = int((1.0 - reveal) * 28)
     shot_type = str(shot.get("shot_type") or "key_claim")
     accent = tuple(theme["accent"])

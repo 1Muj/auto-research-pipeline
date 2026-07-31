@@ -76,6 +76,26 @@ AUTO_VIDEO_THEME=orbit ./scripts/run_video_with_eval.sh
 以标题、论点、论文图、流程节点、证据行、指标和字幕等独立图层构成视频，不再显示完整 PPT 边框。
 镜头规划保存在输出目录的 `scene_timeline.json`。
 
+默认节奏针对论文讲解而不是宣传短片：
+
+- 中文旁白按约 240 字/分钟估时，英文按约 140 词/分钟估时。
+- 普通镜头至少 5 秒；开场 6–8 秒；流程和证据镜头至少 8 秒；指标镜头 6–8 秒。
+- 少于 12 秒的一段旁白不会为了增加镜头数而强拆。
+- 主动画通常在前 1–3.2 秒完成，之后至少保留 1.5 秒稳定阅读时间。
+- 开启 TTS 后，真实音频时长优先，字幕和镜头时间轴会按音频统一缩放。
+
+可以用环境变量调整整体速度：
+
+```bash
+cd /Users/muj666/Desktop/auto
+AUTO_VIDEO_SPEECH_WPM=130 \
+AUTO_VIDEO_CJK_CHARS_PER_SEC=3.6 \
+AUTO_VIDEO_MIN_BEAT_SEC=6 \
+AUTO_VIDEO_MIN_SHOT_SEC=6 \
+AUTO_VIDEO_SPLIT_BEAT_SEC=14 \
+./scripts/run_video_with_eval.sh
+```
+
 如需回看旧版 PPT 式 renderer：
 
 ```bash

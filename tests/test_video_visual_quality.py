@@ -4,7 +4,9 @@ from PIL import Image, ImageDraw
 
 from auto_research.video_pipeline import (
     PAPER_VISUAL_THEMES,
+    _estimate_narration_duration,
     build_scene_timeline,
+    build_subtitles,
     choose_paper_visual_theme,
     _clean_display_text,
     _draw_generated_image,
@@ -109,8 +111,53 @@ def test_scene_timeline_splits_slides_into_video_shots() -> None:
 
     timeline = build_scene_timeline(source, slides, subtitles)
 
-    assert len(timeline) == 4
+    assert len(timeline) == 3
     assert timeline[0]["shot_type"] == "opener"
-    assert timeline[2]["shot_type"] == "process"
+    assert timeline[1]["shot_type"] == "process"
     assert timeline[-1]["motion"] == "sequential_nodes"
     assert all(shot["end_sec"] > shot["start_sec"] for shot in timeline)
+    assert all(shot["hold_sec"] >= 1.5 for shot in timeline)
+
+
+def test_long_single_narration_can_split_without_short_shots() -> None:
+    timeline = build_scene_timeline(
+        {"title": "Long Beat"},
+        [
+            {
+                "index": 1,
+                "title": "Long Research Question",
+                "purpose": "Introduce the paper.",
+                "bullets": ["One complete claim."],
+                "visual_kind": "image",
+            }
+        ],
+        [{"slide_index": 1, "start_sec": 0, "end_sec": 14, "text": "A deliberately long narration beat."}],
+    )
+
+    assert len(timeline) == 2
+    assert all(shot["duration_sec"] >= 5 for shot in timeline)
+    assert all(shot["hold_sec"] >= 1.5 for shot in timeline)
+
+
+def test_narration_pacing_uses_language_and_visual_type_bounds() -> None:
+    assert _estimate_narration_duration("Short.") == 5
+    assert _estimate_narration_duration("这是一个用于解释研究问题的较长中文旁白句子。") >= 5
+
+    subtitles = build_subtitles(
+        [
+            {
+                "index": 1,
+                "speaker_note": "We begin with the research question.",
+                "visual_kind": "image",
+            },
+            {
+                "index": 2,
+                "speaker_note": "First collect evidence. Then plan each scene.",
+                "visual_kind": "flow",
+            },
+        ],
+        seconds_per_slide=20,
+    )
+
+    assert subtitles[0]["end_sec"] - subtitles[0]["start_sec"] >= 6
+    assert subtitles[1]["end_sec"] - subtitles[1]["start_sec"] >= 8
