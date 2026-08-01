@@ -197,45 +197,58 @@ def _json_from_model(text: str | None) -> dict[str, Any] | None:
 
 
 def _call_openai_compatible(prompt: str) -> str | None:
-    key = os.environ.get("OPENAI_API_KEY")
-    if not key:
-        return None
     import httpx
 
-    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-    model = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
     timeout = float(os.environ.get("AUTO_VIDEO_API_TIMEOUT", "60"))
-    body = {
-        "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You produce concise JSON for a PPT/video prompt-based evaluation system."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": 0.2,
-        "max_tokens": int(os.environ.get("AUTO_VIDEO_EVAL_MAX_TOKENS", "6000")),
-        "chat_template_kwargs": {"enable_thinking": False},
-    }
-    try:
-        resp = httpx.post(
-            f"{base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {key}"},
-            json=body,
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        message = data["choices"][0]["message"]
-        content = str(message.get("content") or "")
-        if content.strip():
-            return content
-        return str(message.get("reasoning_content") or "")
-    except Exception:
-        return None
+    primary_configs: list[tuple[str, str, str, str]] = []
+    deepseek_configs: list[tuple[str, str, str, str]] = []
+    openai_key = os.environ.get("OPENAI_API_KEY")
+    if openai_key:
+        base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+        primary_configs.append(("primary", openai_key, base_url, os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")))
+    deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
+    if deepseek_key:
+        deepseek_base = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
+        deepseek_model = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+        if not any(key == deepseek_key and base == deepseek_base and model == deepseek_model for _, key, base, model in primary_configs):
+            deepseek_configs.append(("deepseek_fallback", deepseek_key, deepseek_base, deepseek_model))
+
+    if os.environ.get("AUTO_VIDEO_TEXT_PROVIDER", "auto").strip().lower() == "deepseek":
+        configs = [*deepseek_configs, *primary_configs]
+    else:
+        configs = [*primary_configs, *deepseek_configs]
+
+    for provider, key, base_url, model in configs:
+        body: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You produce concise JSON for a PPT/video prompt-based evaluation system.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.2,
+            "max_tokens": int(os.environ.get("AUTO_VIDEO_EVAL_MAX_TOKENS", "6000")),
+        }
+        if "lum.id" in base_url:
+            body["chat_template_kwargs"] = {"enable_thinking": False}
+        try:
+            resp = httpx.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json=body,
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            message = resp.json()["choices"][0]["message"]
+            content = str(message.get("content") or message.get("reasoning_content") or "").strip()
+            if content:
+                return content
+        except Exception:
+            if provider == "deepseek_fallback":
+                return None
+    return None
 
 
 BUILTIN_CALIBRATION_EXAMPLES = [

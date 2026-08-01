@@ -337,10 +337,19 @@ def _text_model_config() -> tuple[str, str, str, str] | None:
     lumid_key = _lumid_api_key()
     deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
     openai_key = os.environ.get("OPENAI_API_KEY")
-    key = lumid_key or deepseek_key or openai_key
+    preferred = os.environ.get("AUTO_VIDEO_TEXT_PROVIDER", "auto").strip().lower()
+    key = deepseek_key if preferred == "deepseek" and deepseek_key else lumid_key or deepseek_key or openai_key
     if not key:
         return None
-    if lumid_key:
+    if preferred == "deepseek" and deepseek_key:
+        base_url = (
+            os.environ.get("DEEPSEEK_BASE_URL")
+            or os.environ.get("DEEPSEEK_API_BASE")
+            or DEEPSEEK_BASE_URL
+        ).rstrip("/")
+        model = os.environ.get("DEEPSEEK_MODEL") or DEEPSEEK_MODEL
+        provider = "deepseek"
+    elif lumid_key:
         base_url = (
             os.environ.get("LUMID_BASE_URL")
             or os.environ.get("LUM_BASE_URL")
@@ -405,7 +414,7 @@ def _call_text_model(prompt: str) -> str | None:
         return None
     key, base_url, model, _provider = cfg
     timeout = float(os.environ.get("AUTO_VIDEO_API_TIMEOUT", "60"))
-    body = {
+    body: dict[str, Any] = {
         "model": model,
         "messages": [
             {
@@ -416,9 +425,10 @@ def _call_text_model(prompt: str) -> str | None:
         ],
         "temperature": 0.2,
         "max_tokens": int(os.environ.get("AUTO_VIDEO_TEXT_MAX_TOKENS", "2500")),
-        "response_format": {"type": "json_object"},
-        "chat_template_kwargs": {"enable_thinking": False},
     }
+    if _provider == "lumid":
+        body["response_format"] = {"type": "json_object"}
+        body["chat_template_kwargs"] = {"enable_thinking": False}
     try:
         _progress("text_model", "request chat/completions", detail=f"provider={_provider} model={model}")
         _headers, raw = _post_bytes(f"{base_url}/chat/completions", key, body, timeout)
@@ -429,14 +439,63 @@ def _call_text_model(prompt: str) -> str | None:
         if content.strip():
             return content
         reasoning_content = str(message.get("reasoning_content") or "")
-        return reasoning_content if reasoning_content.strip() else None
+        if reasoning_content.strip():
+            return reasoning_content
+        if _provider != "deepseek":
+            return _call_deepseek_text(
+                prompt,
+                system="You produce concise JSON for an academic paper/project-to-video pipeline.",
+            )
+        return None
     except Exception as exc:
         _progress("text_model", "request failed", detail=f"{type(exc).__name__}: {str(exc)[:160]}")
+        if _provider != "deepseek":
+            return _call_deepseek_text(
+                prompt,
+                system="You produce concise JSON for an academic paper/project-to-video pipeline.",
+            )
+        return None
+
+
+def _call_deepseek_text(prompt: str, *, system: str) -> str | None:
+    key = os.environ.get("DEEPSEEK_API_KEY")
+    if not key:
+        return None
+    base_url = (os.environ.get("DEEPSEEK_BASE_URL") or DEEPSEEK_BASE_URL).rstrip("/")
+    model = os.environ.get("DEEPSEEK_MODEL") or DEEPSEEK_MODEL
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.1,
+        "max_tokens": 800,
+    }
+    try:
+        _progress("deepseek_fallback", "request text fallback", detail=f"model={model}")
+        _headers, raw = _post_bytes(f"{base_url}/chat/completions", key, body, 60.0)
+        message = json.loads(raw.decode("utf-8"))["choices"][0]["message"]
+        content = str(message.get("content") or message.get("reasoning_content") or "").strip()
+        return content or None
+    except Exception as exc:
+        _progress("deepseek_fallback", "request failed", detail=f"{type(exc).__name__}: {str(exc)[:160]}")
         return None
 
 
 def _call_openai_compatible(prompt: str) -> str | None:
     return _call_text_model(prompt)
+
+
+def _clean_vision_response_content(value: Any) -> str | None:
+    content = str(value or "").strip()
+    audio_marker = content.find("[generated audio](data:audio/")
+    if audio_marker >= 0:
+        content = content[:audio_marker].strip()
+    lowered = content.lower()
+    if not content or "internal server error" in lowered or lowered.startswith("(qwen-omni error:"):
+        return None
+    return content
 
 
 def _call_openai_vision(prompt: str, image_path: Path) -> str | None:
@@ -490,15 +549,23 @@ def _call_openai_vision(prompt: str, image_path: Path) -> str | None:
         "temperature": 0.0,
         "max_tokens": 500,
     }
-    try:
-        _progress("vlm_cursor", "request vision grounding", detail=f"model={model}")
-        _headers, raw = _post_bytes(f"{base_url}/chat/completions", key, body, timeout)
-        data = json.loads(raw.decode("utf-8"))
-        _progress("vlm_cursor", "vision response received", detail=f"model={model}")
-        return str(data["choices"][0]["message"]["content"])
-    except Exception as exc:
-        _progress("vlm_cursor", "vision request failed", detail=f"{type(exc).__name__}: {str(exc)[:160]}")
-        return None
+    attempts = max(1, int(os.environ.get("AUTO_VIDEO_VISION_ATTEMPTS", "2")))
+    for attempt in range(1, attempts + 1):
+        try:
+            _progress("vlm_cursor", "request vision grounding", detail=f"model={model} attempt={attempt}/{attempts}")
+            _headers, raw = _post_bytes(f"{base_url}/chat/completions", key, body, timeout)
+            data = json.loads(raw.decode("utf-8"))
+            raw_content = str(data["choices"][0]["message"].get("content") or "")
+            content = _clean_vision_response_content(raw_content)
+            if not content:
+                raise ValueError(raw_content[:200] or "empty vision response")
+            _progress("vlm_cursor", "vision response received", detail=f"model={model} attempt={attempt}/{attempts}")
+            return content
+        except Exception as exc:
+            _progress("vlm_cursor", "vision request failed", detail=f"attempt={attempt}/{attempts} {type(exc).__name__}: {str(exc)[:160]}")
+            if attempt < attempts:
+                time.sleep(min(2.0, 0.5 * attempt))
+    return None
 
 
 def _call_lumid_image(prompt: str, out: Path) -> tuple[bool, str]:
@@ -1480,7 +1547,7 @@ def build_cursor_plan(
                 x = int(grounded["x_percent"])
                 y = int(grounded["y_percent"])
                 reason = str(grounded.get("reason") or reason)
-                grounding_mode = "vlm"
+                grounding_mode = str(grounded.get("grounding_mode") or "vlm")
                 _progress("cursor_builder", "VLM cursor point ready", current=i + 1, total=total, detail=f"slide={slide_index} x={x} y={y}")
             else:
                 _progress("cursor_builder", "VLM cursor fallback", current=i + 1, total=total, detail=f"slide={slide_index} using heuristic x={x} y={y}")
@@ -1529,6 +1596,22 @@ def _ground_cursor_with_vlm(
         """
     ).strip()
     data = _json_from_model(_call_openai_vision(prompt, image_path))
+    grounding_mode = "vlm"
+    if not isinstance(data, dict):
+        fallback_prompt = "\n\n".join(
+            [
+                "The image model is unavailable. Infer a conservative cursor location using only the textual slide metadata below.",
+                "Do not claim that you inspected the image. Return the requested JSON only.",
+                prompt,
+            ]
+        )
+        data = _json_from_model(
+            _call_deepseek_text(
+                fallback_prompt,
+                system="You provide conservative JSON cursor coordinates from slide text when vision is unavailable.",
+            )
+        )
+        grounding_mode = "deepseek_text"
     if not isinstance(data, dict):
         return None
     try:
@@ -1541,6 +1624,7 @@ def _ground_cursor_with_vlm(
         "y_percent": y,
         "target_label": str(data.get("target_label", "")),
         "reason": str(data.get("reason", "")),
+        "grounding_mode": grounding_mode,
     }
 
 

@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+CALLER_DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-}"
 set -a
 if [[ -f "/tmp/lumid.env" ]]; then
   # shellcheck disable=SC1091
@@ -14,6 +15,14 @@ if [[ -f "deploy/video_api.env" ]]; then
   source "deploy/video_api.env"
 fi
 set +a
+if [[ -n "$CALLER_DEEPSEEK_API_KEY" ]]; then
+  export DEEPSEEK_API_KEY="$CALLER_DEEPSEEK_API_KEY"
+fi
+
+# The full demo is video-native by default. Use AUTO_VIDEO_RENDER_STYLE_OVERRIDE=arbor
+# only when intentionally comparing against the legacy slide renderer.
+export AUTO_VIDEO_RENDER_STYLE="${AUTO_VIDEO_RENDER_STYLE_OVERRIDE:-scene}"
+export AUTO_VIDEO_VISION_ATTEMPTS="${AUTO_VIDEO_VISION_ATTEMPTS:-2}"
 
 INPUT_PATH="${1:-inputs/papers/Automatic Video Generation.pdf}"
 KIND="${KIND:-paper}"
@@ -52,6 +61,12 @@ echo "LOG=$LOG"
 echo "EVAL_REPORT=$EVAL_REPORT"
 echo "EVAL_REPAIR_ROUNDS=$AUTO_VIDEO_EVAL_REPAIR_ROUNDS"
 echo "EVAL_REPAIR_THRESHOLD=$AUTO_VIDEO_EVAL_REPAIR_THRESHOLD"
+echo "RENDER_STYLE=$AUTO_VIDEO_RENDER_STYLE"
+echo "TEXT_MODEL=${LUMID_MODEL:-${DEEPSEEK_MODEL:-${OPENAI_MODEL:-not_set}}}"
+echo "VISION_MODEL=${OPENAI_VISION_MODEL:-${LUMID_OMNI_MODEL:-not_set}}"
+echo "IMAGE_MODEL=${LUMID_IMAGE_MODEL:-not_set}"
+echo "TTS_MODEL=${LUMID_TTS_MODEL:-not_set}"
+echo "DEEPSEEK_FALLBACK=${DEEPSEEK_API_KEY:+loaded}"
 
 for module in pypdf; do
   if ! "$PYTHON_BIN" -c "import ${module}" >/dev/null 2>&1; then

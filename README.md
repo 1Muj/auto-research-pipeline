@@ -145,7 +145,7 @@ For DeepSeek-compatible text generation:
 export DEEPSEEK_API_KEY="YOUR_KEY"
 export DEEPSEEK_BASE_URL="https://api.deepseek.com"
 export DEEPSEEK_MODEL="deepseek-chat"
-export AUTO_VIDEO_RENDER_STYLE="arbor"
+export AUTO_VIDEO_RENDER_STYLE="scene"
 ```
 
 Main outputs:

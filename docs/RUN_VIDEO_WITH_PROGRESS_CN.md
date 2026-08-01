@@ -23,6 +23,31 @@ cd /Users/muj666/Desktop/auto
 ./scripts/run_video_with_eval.sh
 ```
 
+这条命令现在默认启用完整的视频化流程：
+
+- `AUTO_VIDEO_RENDER_STYLE=scene`：标题、论文图、流程、数字和字幕作为独立图层，不显示完整 PPT 边框。
+- `qwen3.6-27b`：论文理解、脚本和 storyboard。
+- `qwen-omni`：图像相关性检查与视觉定位；失败时自动重试 2 次。
+- `qwen-image`：生成与当前论文内容相关的视觉素材。
+- `qwen-tts`：合成旁白并自动 mux 到最终 `video.mp4`。
+- 如果配置了 `DEEPSEEK_API_KEY`，Lumid 文本请求或 Omni 文字定位失败时可使用 DeepSeek 文字降级；DeepSeek 不会被描述成看过图片。
+
+如需明确指定输入论文并把 Omni 重试次数提高到 3 次：
+
+```bash
+cd /Users/muj666/Desktop/auto
+AUTO_VIDEO_VISION_ATTEMPTS=3 \
+./scripts/run_video_with_eval.sh "inputs/papers/Automatic Video Generation.pdf"
+```
+
+如果已经配置了可用的 DeepSeek key，并希望整条脚本和评估器直接使用 DeepSeek 文字模型：
+
+```bash
+cd /Users/muj666/Desktop/auto
+AUTO_VIDEO_TEXT_PROVIDER=deepseek \
+./scripts/run_video_with_eval.sh "inputs/papers/Automatic Video Generation.pdf"
+```
+
 默认自动修复规则：
 
 - `AUTO_VIDEO_EVAL_REPAIR_ROUNDS=1`：低分时自动修复 1 轮。

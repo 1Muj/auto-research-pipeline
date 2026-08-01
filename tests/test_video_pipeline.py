@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from auto_research.video_pipeline import _text_model_provider, build_slides
+from auto_research.video_pipeline import (
+    _clean_vision_response_content,
+    _text_model_provider,
+    build_slides,
+)
 
 
 def test_video_pipeline_prefers_deepseek_provider(monkeypatch) -> None:
@@ -11,6 +15,21 @@ def test_video_pipeline_prefers_deepseek_provider(monkeypatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     assert _text_model_provider() == "deepseek"
+
+
+def test_video_pipeline_can_force_deepseek_when_lumid_is_also_loaded(monkeypatch) -> None:
+    monkeypatch.setenv("LUM_API_KEY", "lumid-key")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
+    monkeypatch.setenv("AUTO_VIDEO_TEXT_PROVIDER", "deepseek")
+
+    assert _text_model_provider() == "deepseek"
+
+
+def test_vision_response_removes_generated_audio_payload() -> None:
+    value = "The image contains six panels.\n\n[generated audio](data:audio/mpeg;base64,AAAA)"
+
+    assert _clean_vision_response_content(value) == "The image contains six panels."
+    assert _clean_vision_response_content("(qwen-omni error: 500 Internal Server Error)") is None
 
 
 def test_video_slide_builder_adds_rich_visual_types() -> None:
@@ -30,13 +49,13 @@ def test_video_slide_builder_adds_rich_visual_types() -> None:
 
     assert [slide["visual_kind"] for slide in slides] == [
         "image",
-        "screenshot",
         "flow",
         "table",
         "metrics",
+        "image",
     ]
     assert all(slide["visual_caption"] for slide in slides)
-    assert slides[3]["visual_table"][0] == ["Signal", "Source cue", "Presentation use"]
+    assert slides[2]["visual_table"][0] == ["Aspect", "Focus", "Why it matters"]
 
 
 def test_video_build_cli_writes_artifacts(tmp_path: Path) -> None:
