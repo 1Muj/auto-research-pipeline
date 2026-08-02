@@ -604,25 +604,23 @@ def _call_lumid_image(prompt: str, out: Path) -> tuple[bool, str]:
 
 
 def _image_generation_prompt(slide: dict[str, Any]) -> str:
-    title = _clean_display_text(slide.get("title"))
-    purpose = _clean_display_text(slide.get("purpose"))
     bullets = [_clean_display_text(item) for item in slide.get("bullets", []) if str(item).strip()]
     caption = _clean_display_text(slide.get("visual_caption"))
     intent = _clean_display_text(slide.get("visual_prompt"))
-    required_concepts = "; ".join([title, purpose, *bullets, caption, intent])
-    required_concepts = re.sub(r"\s+", " ", required_concepts).strip()[:1800]
+    visual_concept = intent or caption or (bullets[0] if bullets else "A clear research workflow")
+    visual_concept = re.sub(r"\bslides?\b", "visual panels", visual_concept, flags=re.I)
+    visual_concept = re.sub(r"\bpresentations?\b", "spoken explanations", visual_concept, flags=re.I)
+    visual_concept = re.sub(r"\bsplit[- ]screen\b", "balanced left-right composition", visual_concept, flags=re.I)
+    visual_concept = re.sub(r"\b(?:browser|dashboard|interface|screenshot|webpage)\b", "scene", visual_concept, flags=re.I)
+    visual_concept = re.sub(r"\s+", " ", visual_concept).strip()[:700]
     return " ".join(
         [
-            "Create a clean text-free academic presentation illustration in 16:9.",
-            "The illustration is for one specific slide and must visually explain its exact claims, not a generic technology theme.",
-            "Use abstract shapes, icons, diagrams, chart-like blocks, arrows, timelines, and simple human/AI silhouettes.",
-            "Absolutely no readable text, no fake text, no letters, no numbers, no labels, no captions, no code, no UI screenshots, no watermark.",
-            "Do not create a browser window, desktop screenshot, app interface, cropped slide, document scan, or partial webpage.",
-            "Show the complete scene and every important object fully inside the frame with at least eight percent empty safe margin on all four sides.",
-            "Do not crop people, diagrams, charts, arrows, panels, or objects at any edge.",
-            "If the concept normally needs labels, replace labels with colored blocks, dots, icons, and spatial grouping.",
-            f"Required slide concepts: {required_concepts}",
-            "Flat vector style, high contrast, clean composition, suitable as a slide visual.",
+            "Full-bleed editorial vector illustration, widescreen 16:9.",
+            f"Visual concept: {visual_concept}.",
+            "Depict the idea directly with people, physical objects, pictograms, arrows, and spatial relationships across one cohesive canvas.",
+            "Use unlabelled shapes and symbols only. The image contains no words, letters, numbers, logos, controls, menus, or framed page.",
+            "Keep every important object fully visible with eight percent empty safe margin on all four sides.",
+            "Clean flat-vector style, strong silhouette, restrained color palette, no nested canvas.",
         ]
     ).strip()
 
@@ -712,10 +710,11 @@ def generate_slide_images(slides: list[dict[str, Any]], out_dir: Path, *, use_im
             _progress("image_builder", "using cached image", current=n, total=total, detail=f"slide={slide['index']} path={path.name}")
         if not ok and should_generate:
             for attempt in range(1, max_attempts + 1):
-                retry_reason = "; ".join(validation.get("reasons") or [])
                 attempt_prompt = prompt
-                if retry_reason:
-                    attempt_prompt += f" Previous attempt was rejected because: {retry_reason}. Correct those defects."
+                if attempt == 2:
+                    attempt_prompt += " Use a physical metaphor with characters and tangible objects placed directly on the background."
+                elif attempt >= 3:
+                    attempt_prompt += " Use a minimal abstract composition of large unlabelled icons connected by arrows, with no rectangular panels."
                 _progress(
                     "image_builder",
                     "calling image model",
@@ -1403,6 +1402,45 @@ def build_subtitles(slides: list[dict[str, Any]], *, seconds_per_slide: int) -> 
     return subtitles
 
 
+def _scene_shot_sequence(
+    *,
+    visual_kind: str,
+    beat_count: int,
+    slide_position: int,
+    has_generated_image: bool,
+) -> list[str]:
+    if beat_count <= 0:
+        return []
+    primary = {
+        "flow": "process",
+        "table": "evidence",
+        "metrics": "metric",
+        "image": "image_focus" if has_generated_image else "key_claim",
+    }.get(visual_kind, "key_claim")
+    detail = {
+        "flow": "process_focus",
+        "table": "evidence_focus",
+        "metrics": "metric",
+        "image": "detail_focus" if has_generated_image else "contrast",
+    }.get(visual_kind, "contrast")
+
+    if beat_count == 1:
+        return ["opener" if slide_position == 1 else primary]
+    if beat_count == 2:
+        first = "opener" if slide_position == 1 else primary
+        return [first, "synthesis"]
+    if beat_count == 3:
+        first = "opener" if slide_position == 1 else "section_title"
+        return [first, primary, "synthesis"]
+
+    first = "opener" if slide_position == 1 else "section_title"
+    sequence = [first, primary, detail]
+    while len(sequence) < beat_count - 1:
+        sequence.append("key_claim" if len(sequence) % 2 else "contrast")
+    sequence.append("synthesis")
+    return sequence[:beat_count]
+
+
 def build_scene_timeline(
     source: dict[str, Any],
     slides: list[dict[str, Any]],
@@ -1454,25 +1492,19 @@ def build_scene_timeline(
 
         visual_kind = str(slide.get("visual_kind") or "image").lower()
         bullets = [_clean_display_text(item) for item in slide.get("bullets", []) if str(item).strip()]
+        generated_image_path = str(slide.get("generated_image_path") or "")
+        has_generated_image = bool(generated_image_path and Path(generated_image_path).is_file())
+        shot_sequence = _scene_shot_sequence(
+            visual_kind=visual_kind,
+            beat_count=len(beats),
+            slide_position=slide_position,
+            has_generated_image=has_generated_image,
+        )
         for beat_index, beat in enumerate(beats):
             start = float(beat.get("start_sec") or 0)
             end = max(start + 1.0, float(beat.get("end_sec") or start + 5.0))
             is_first = beat_index == 0
-            is_last = beat_index == len(beats) - 1
-            if slide_position == 1 and is_first:
-                shot_type = "opener"
-            elif visual_kind == "flow":
-                shot_type = "process"
-            elif visual_kind == "table":
-                shot_type = "evidence"
-            elif visual_kind == "metrics":
-                shot_type = "metric"
-            elif visual_kind == "image" and not is_last:
-                shot_type = "image_focus"
-            elif is_last:
-                shot_type = "synthesis"
-            else:
-                shot_type = "key_claim"
+            shot_type = shot_sequence[beat_index]
 
             focus_index = min(beat_index, max(0, len(bullets) - 1))
             focus_text = bullets[focus_index] if bullets else _clean_display_text(beat.get("text"))
@@ -1499,13 +1531,34 @@ def build_scene_timeline(
                     "focus_text": focus_text,
                     "focus_index": focus_index,
                     "visual_kind": visual_kind,
+                    "has_generated_image": has_generated_image,
+                    "composition_variant": (slide_index + beat_index) % 4,
+                    "background_stage": {
+                        "opener": "quiet",
+                        "section_title": "quiet",
+                        "key_claim": "split",
+                        "contrast": "split",
+                        "image_focus": "media",
+                        "detail_focus": "media",
+                        "process": "technical",
+                        "process_focus": "quiet",
+                        "evidence": "technical",
+                        "evidence_focus": "quiet",
+                        "metric": "spotlight",
+                        "synthesis": "quiet",
+                    }.get(shot_type, "technical"),
                     "transition": "fade" if is_first else "continue",
                     "motion": {
                         "opener": "title_reveal",
+                        "section_title": "chapter_reveal",
                         "process": "sequential_nodes",
+                        "process_focus": "node_focus",
                         "evidence": "row_reveal",
+                        "evidence_focus": "row_focus",
                         "metric": "number_focus",
                         "image_focus": "image_settle",
+                        "detail_focus": "detail_pan",
+                        "contrast": "split_compare",
                         "synthesis": "takeaway_stack",
                         "key_claim": "statement_reveal",
                     }.get(shot_type, "statement_reveal"),
@@ -3232,7 +3285,7 @@ def _render_scene_mp4_video(
             local = tick / max(1, frame_count - 1)
             img = Image.new("RGB", (width, height), background_color)
             draw = ImageDraw.Draw(img)
-            _draw_arbor_background(draw, width, height, sec, source=source, slide=slide)
+            _draw_scene_background(draw, width, height, sec, source=source, slide=slide, shot=shot)
             background_frame = img.copy()
             _draw_scene_progress(
                 draw,
@@ -3304,6 +3357,58 @@ def _scene_ease(value: float) -> float:
     return value * value * (3.0 - 2.0 * value)
 
 
+def _scene_color(color: tuple[int, int, int], delta: int) -> tuple[int, int, int]:
+    return tuple(max(0, min(255, channel + delta)) for channel in color)
+
+
+def _draw_scene_background(
+    draw: Any,
+    width: int,
+    height: int,
+    sec: float,
+    *,
+    source: dict[str, Any],
+    slide: dict[str, Any],
+    shot: dict[str, Any],
+) -> None:
+    theme = _paper_visual_theme(source)
+    background = tuple(theme["background"])
+    pattern = tuple(theme["pattern"])
+    line = tuple(theme["line"])
+    accent = tuple(theme["accent"])
+    stage = str(shot.get("background_stage") or "technical")
+    variant = int(shot.get("composition_variant") or 0)
+
+    if stage == "technical":
+        _draw_arbor_background(draw, width, height, sec, source=source, slide=slide)
+        return
+
+    draw.rectangle((0, 0, width, height), fill=background)
+    if stage == "split":
+        split_x = int(width * (0.46 if variant % 2 else 0.54))
+        draw.rectangle((split_x, 0, width, height), fill=_scene_color(background, 5))
+        draw.line((split_x, 96, split_x, height - 72), fill=pattern, width=1)
+        draw.rectangle((split_x - 2, 118, split_x + 2, 214), fill=accent)
+    elif stage == "spotlight":
+        band_left = 0 if variant % 2 else int(width * 0.57)
+        band_right = int(width * 0.43) if variant % 2 else width
+        draw.rectangle((band_left, 0, band_right, height), fill=_scene_color(background, 7))
+        draw.line((band_right if variant % 2 else band_left, 0, band_right if variant % 2 else band_left, height), fill=line, width=2)
+        for y in range(138, height - 90, 64):
+            draw.line((band_left + 42, y, band_right - 42, y), fill=line, width=1)
+    elif stage == "media":
+        rail_x = 42 if variant % 2 else width - 46
+        draw.rectangle((rail_x, 0, rail_x + 5, height), fill=accent)
+        draw.line((0, 94, width, 94), fill=line, width=1)
+        draw.line((0, height - 154, width, height - 154), fill=line, width=1)
+    else:
+        shot_type = str(shot.get("shot_type") or "")
+        edge = 64 if shot_type in {"opener", "section_title"} else 64 + (variant % 3) * 34
+        draw.line((edge, 118, edge, height - 102), fill=pattern, width=1)
+        draw.rectangle((edge - 2, 164, edge + 3, 266), fill=accent)
+        draw.line((edge, height - 102, width - 72, height - 102), fill=line, width=1)
+
+
 def _draw_scene_progress(
     draw: Any,
     shot: dict[str, Any],
@@ -3316,9 +3421,14 @@ def _draw_scene_progress(
 ) -> None:
     accent = tuple(theme["accent"])
     muted = (142, 157, 178)
+    shot_type = str(shot.get("shot_type") or "")
+    slide_index = int(shot.get("slide_index") or 0)
+    if shot_type in {"opener", "section_title"}:
+        draw.text((width - 176, 42), f"{slide_index:02d}", fill=accent, font=font)
+        return
     label = str(shot.get("section_label") or shot.get("headline") or "Research")
     _draw_single_line_text(draw, label.upper(), (64, 42), font=font, width=760, fill=accent)
-    shot_label = f"{shot.get('shot_id', '')}  {str(shot.get('shot_type', '')).replace('_', ' ').upper()}"
+    shot_label = f"CHAPTER {slide_index:02d}"
     _draw_single_line_text(draw, shot_label, (width - 330, 42), font=font, width=266, fill=muted)
     progress = max(0.0, min(1.0, sec / max(0.001, total_duration)))
     draw.rectangle((64, 78, width - 64, 80), fill=tuple(theme["line"]))
@@ -3373,6 +3483,34 @@ def _draw_scene_composition(
         draw.text((width - 250, 366), "01", fill=accent, font=fonts["number"])
         return
 
+    if shot_type == "section_title":
+        chapter = int(shot.get("slide_index") or 0)
+        draw.text((92, 154 + y_shift), f"{chapter:02d}", fill=accent, font=fonts["number"])
+        draw.rectangle((92, 282 + y_shift, 312, 287 + y_shift), fill=accent)
+        _draw_wrapped_text(
+            draw,
+            str(shot.get("headline") or ""),
+            (366, 170 + y_shift),
+            font=fonts["display"],
+            width=760,
+            max_height=160,
+            fill=fg,
+            spacing=8,
+            max_lines=3,
+        )
+        _draw_wrapped_text(
+            draw,
+            str(shot.get("focus_text") or ""),
+            (370, 350 + y_shift),
+            font=fonts["body"],
+            width=710,
+            max_height=104,
+            fill=muted,
+            spacing=6,
+            max_lines=3,
+        )
+        return
+
     headline = str(shot.get("headline") or "")
     _draw_single_line_text(draw, headline, (76, 112 + y_shift), font=fonts["headline"], width=1128, fill=fg)
 
@@ -3401,12 +3539,45 @@ def _draw_scene_composition(
             width=450,
             fill=muted,
         )
+    elif shot_type == "detail_focus":
+        image_box = (70, 140, 742, height - 158)
+        if not _draw_generated_image(draw, slide, image_box):
+            _draw_scene_visual_fallback(draw, slide, image_box, reveal=reveal, fonts=fonts)
+        draw.rectangle((790, 176, 798, 410), fill=accent)
+        _draw_wrapped_text(
+            draw,
+            str(shot.get("focus_text") or ""),
+            (830, 188 + y_shift),
+            font=fonts["headline"],
+            width=360,
+            max_height=210,
+            fill=fg,
+            spacing=7,
+            max_lines=5,
+        )
+        _draw_wrapped_text(
+            draw,
+            str(slide.get("visual_caption") or ""),
+            (832, 430),
+            font=fonts["small"],
+            width=350,
+            max_height=62,
+            fill=muted,
+            spacing=4,
+            max_lines=3,
+        )
     elif shot_type == "process":
         _draw_scene_process(draw, slide, (76, 205, width - 76, 500), reveal=reveal, accent=accent, fonts=fonts)
+    elif shot_type == "process_focus":
+        _draw_scene_process_focus(draw, slide, shot, (92, 172, width - 92, 514), reveal=reveal, accent=accent, fonts=fonts)
     elif shot_type == "evidence":
         _draw_scene_evidence(draw, slide, (92, 190, width - 92, 510), reveal=reveal, fonts=fonts)
+    elif shot_type == "evidence_focus":
+        _draw_scene_evidence_focus(draw, slide, shot, (92, 178, width - 92, 510), reveal=reveal, accent=accent, fonts=fonts)
     elif shot_type == "metric":
         _draw_scene_metric(draw, slide, shot, (76, 182, width - 76, 510), reveal=reveal, accent=accent, fonts=fonts)
+    elif shot_type == "contrast":
+        _draw_scene_contrast(draw, slide, shot, (76, 174, width - 76, 510), reveal=reveal, accent=accent, fonts=fonts)
     elif shot_type == "synthesis":
         _draw_scene_takeaways(draw, slide, (92, 190, width - 92, 510), reveal=reveal, accent=accent, fonts=fonts)
     else:
@@ -3423,6 +3594,30 @@ def _draw_scene_composition(
             spacing=8,
             max_lines=5,
         )
+
+
+def _draw_scene_contrast(
+    draw: Any,
+    slide: dict[str, Any],
+    shot: dict[str, Any],
+    box: tuple[int, int, int, int],
+    *,
+    reveal: float,
+    accent: tuple[int, int, int],
+    fonts: dict[str, Any],
+) -> None:
+    x1, y1, x2, y2 = box
+    items = [_clean_display_text(item) for item in (slide.get("bullets") or []) if str(item).strip()]
+    focus_index = min(int(shot.get("focus_index") or 0), max(0, len(items) - 1))
+    left = items[max(0, focus_index - 1)] if items else str(shot.get("focus_text") or "")
+    right = items[focus_index] if items else str(shot.get("narration") or "")
+    mid = (x1 + x2) // 2
+    draw.text((x1, y1), "CONTEXT", fill=(145, 164, 187), font=fonts["small"])
+    draw.text((mid + 52, y1), "IMPLICATION", fill=accent, font=fonts["small"])
+    draw.line((mid, y1, mid, y2), fill=(47, 74, 99), width=2)
+    _draw_wrapped_text(draw, left, (x1, y1 + 62), font=fonts["headline"], width=mid - x1 - 54, max_height=220, fill=(213, 223, 236), spacing=7, max_lines=5)
+    if reveal > 0.45:
+        _draw_wrapped_text(draw, right, (mid + 52, y1 + 62), font=fonts["headline"], width=x2 - mid - 52, max_height=220, fill=(244, 247, 251), spacing=7, max_lines=5)
 
 
 def _draw_scene_process(
@@ -3466,6 +3661,37 @@ def _draw_scene_process(
         )
 
 
+def _draw_scene_process_focus(
+    draw: Any,
+    slide: dict[str, Any],
+    shot: dict[str, Any],
+    box: tuple[int, int, int, int],
+    *,
+    reveal: float,
+    accent: tuple[int, int, int],
+    fonts: dict[str, Any],
+) -> None:
+    x1, y1, x2, y2 = box
+    items = [_clean_visual_item(str(item)) for item in (slide.get("visual_items") or slide.get("bullets") or [])[:5]]
+    if not items:
+        items = ["Input", "Reason", "Generate", "Evaluate"]
+    focus = min(int(shot.get("focus_index") or 0), len(items) - 1)
+    center_x = (x1 + x2) // 2
+    center_y = (y1 + y2) // 2
+    for offset, index in [(-1, focus - 1), (1, focus + 1)]:
+        if 0 <= index < len(items):
+            side_x = x1 + 36 if offset < 0 else x2 - 246
+            draw.text((side_x, center_y - 62), f"{index + 1:02d}", fill=(82, 111, 139), font=fonts["small"])
+            _draw_wrapped_text(draw, items[index], (side_x, center_y - 24), font=fonts["small"], width=210, max_height=72, fill=(141, 158, 179), spacing=4, max_lines=3)
+            draw.line((side_x, center_y + 66, side_x + 180, center_y + 66), fill=(40, 63, 85), width=1)
+    active_w = 480
+    active_x = center_x - active_w // 2
+    rise = int((1.0 - reveal) * 28)
+    draw.rectangle((active_x, center_y - 112 + rise, active_x + 7, center_y + 112 + rise), fill=accent)
+    draw.text((active_x + 42, center_y - 94 + rise), f"STEP {focus + 1:02d}", fill=accent, font=fonts["small"])
+    _draw_wrapped_text(draw, items[focus], (active_x + 42, center_y - 42 + rise), font=fonts["headline"], width=active_w - 62, max_height=150, fill=(242, 246, 251), spacing=7, max_lines=4)
+
+
 def _draw_scene_evidence(
     draw: Any,
     slide: dict[str, Any],
@@ -3475,6 +3701,32 @@ def _draw_scene_evidence(
     fonts: dict[str, Any],
 ) -> None:
     _draw_arbor_table(draw, slide, box, reveal=reveal, font=fonts["mono"])
+
+
+def _draw_scene_evidence_focus(
+    draw: Any,
+    slide: dict[str, Any],
+    shot: dict[str, Any],
+    box: tuple[int, int, int, int],
+    *,
+    reveal: float,
+    accent: tuple[int, int, int],
+    fonts: dict[str, Any],
+) -> None:
+    x1, y1, x2, y2 = box
+    rows = [row for row in (slide.get("visual_table") or []) if isinstance(row, list)]
+    data_rows = rows[1:] if len(rows) > 1 else rows
+    focus = min(int(shot.get("focus_index") or 0), max(0, len(data_rows) - 1))
+    row = data_rows[focus] if data_rows else (slide.get("bullets") or [shot.get("focus_text") or "Evidence"])
+    cells = [_clean_display_text(cell) for cell in row[:3]]
+    draw.text((x1, y1), f"EVIDENCE {focus + 1:02d}", fill=accent, font=fonts["small"])
+    draw.rectangle((x1, y1 + 48, x1 + int((x2 - x1) * reveal), y1 + 54), fill=accent)
+    column_width = max(180, (x2 - x1 - 72) // max(1, len(cells)))
+    for index, cell in enumerate(cells):
+        x = x1 + index * (column_width + 36)
+        if index > 0:
+            draw.line((x - 18, y1 + 82, x - 18, y2 - 16), fill=(43, 67, 90), width=1)
+        _draw_wrapped_text(draw, cell, (x, y1 + 92), font=fonts["headline"] if index == 0 else fonts["body"], width=column_width, max_height=190, fill=(243, 247, 251) if index == 0 else (190, 205, 224), spacing=7, max_lines=5)
 
 
 def _draw_scene_metric(
@@ -3494,13 +3746,18 @@ def _draw_scene_metric(
     cards = _metric_cards_from_items(row_items or items)
     focus_index = min(int(shot.get("focus_index") or 0), max(0, len(cards) - 1))
     value, label = cards[focus_index]
-    draw.text((x1, y1 + 18), value, fill=accent, font=fonts["number"])
+    variant = int(shot.get("composition_variant") or 0)
+    focus_right = bool(variant % 2)
+    number_x = x1 + 700 if focus_right else x1
+    label_x = x1 + 650 if focus_right else x1 + 8
+    list_x = x1 if focus_right else x1 + 650
+    draw.text((number_x, y1 + 18), value, fill=accent, font=fonts["number"])
     _draw_wrapped_text(
         draw,
         label,
-        (x1 + 8, y1 + 126),
+        (label_x, y1 + 126),
         font=fonts["headline"],
-        width=520,
+        width=470,
         max_height=120,
         fill=(239, 244, 250),
         spacing=5,
@@ -3509,9 +3766,9 @@ def _draw_scene_metric(
     visible = min(len(cards), max(1, int(math.ceil(reveal * len(cards)))))
     for i, (small_value, small_label) in enumerate(cards[:visible]):
         y = y1 + i * 66
-        draw.text((x1 + 650, y + 6), small_value, fill=accent, font=fonts["small"])
-        _draw_single_line_text(draw, small_label, (x1 + 760, y + 6), font=fonts["small"], width=x2 - x1 - 770, fill=(194, 208, 226))
-        draw.line((x1 + 650, y + 42, x2, y + 42), fill=(38, 60, 82), width=1)
+        draw.text((list_x, y + 6), small_value, fill=accent, font=fonts["small"])
+        _draw_single_line_text(draw, small_label, (list_x + 110, y + 6), font=fonts["small"], width=440, fill=(194, 208, 226))
+        draw.line((list_x, y + 42, min(x2, list_x + 540), y + 42), fill=(38, 60, 82), width=1)
 
 
 def _draw_scene_takeaways(

@@ -37,11 +37,13 @@ def test_image_prompt_is_specific_and_requires_complete_framing() -> None:
         }
     )
 
-    assert "Cross-modal alignment" in prompt
-    assert "cursor follows the evidence" in prompt
+    assert "synchronized three-lane timeline" in prompt
+    assert "Cross-modal alignment" not in prompt
     assert "eight percent empty safe margin" in prompt
-    assert "Do not crop" in prompt
-    assert "generic technology theme" in prompt
+    assert "Keep every important object fully visible" in prompt
+    assert "Full-bleed editorial vector illustration" in prompt
+    assert "no nested canvas" in prompt
+    assert "Synchronize narration with the current slide" not in prompt
 
 
 def test_generated_image_uses_contain_instead_of_crop(tmp_path: Path) -> None:
@@ -114,9 +116,38 @@ def test_scene_timeline_splits_slides_into_video_shots() -> None:
     assert len(timeline) == 3
     assert timeline[0]["shot_type"] == "opener"
     assert timeline[1]["shot_type"] == "process"
-    assert timeline[-1]["motion"] == "sequential_nodes"
+    assert timeline[-1]["shot_type"] == "synthesis"
+    assert timeline[-1]["motion"] == "takeaway_stack"
     assert all(shot["end_sec"] > shot["start_sec"] for shot in timeline)
     assert all(shot["hold_sec"] >= 1.5 for shot in timeline)
+
+
+def test_four_beat_sections_use_distinct_video_compositions() -> None:
+    source = {"title": "Variety Test"}
+    slides = [
+        {
+            "index": 1,
+            "title": "Pipeline",
+            "purpose": "Explain the method.",
+            "bullets": ["Input", "Reason", "Generate"],
+            "visual_kind": "flow",
+            "visual_items": ["Input", "Reason", "Generate"],
+        }
+    ]
+    subtitles = [
+        {"slide_index": 1, "start_sec": i * 6, "end_sec": (i + 1) * 6, "text": f"Beat {i + 1}"}
+        for i in range(4)
+    ]
+
+    timeline = build_scene_timeline(source, slides, subtitles)
+
+    assert [shot["shot_type"] for shot in timeline] == [
+        "opener",
+        "process",
+        "process_focus",
+        "synthesis",
+    ]
+    assert len({shot["background_stage"] for shot in timeline}) >= 2
 
 
 def test_long_single_narration_can_split_without_short_shots() -> None:

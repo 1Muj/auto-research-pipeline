@@ -43,9 +43,10 @@ DEFAULT_DIMENSIONS = [
             "Visual elements serve the explanation rather than acting as decoration.",
             "The video does not merely hold a complete static PPT page on screen.",
             "Information is revealed progressively at a density suitable for narrated video.",
+            "Consecutive shots use meaningfully different compositions when the narrative function changes, rather than repeatedly animating one interface template.",
         ],
         "high_signals": ["legible scenes", "clear hierarchy", "useful visuals", "progressive reveal"],
-        "low_signals": ["tiny text", "static PPT framing", "irrelevant visuals", "weak hierarchy"],
+        "low_signals": ["tiny text", "static PPT framing", "repeated interface template", "irrelevant visuals", "weak hierarchy"],
     },
     {
         "id": "audio_narration_quality",
@@ -787,6 +788,8 @@ def summarize_artifact_context(artifact_context: dict[str, Any]) -> dict[str, An
             "animation_sec": item.get("animation_sec"),
             "hold_sec": item.get("hold_sec"),
             "shot_type": item.get("shot_type"),
+            "composition_variant": item.get("composition_variant"),
+            "background_stage": item.get("background_stage"),
             "motion": item.get("motion"),
             "focus_text": _truncate_text(item.get("focus_text"), 220),
         }
