@@ -3405,13 +3405,13 @@ def _render_scene_mp4_video(
     background_color = tuple(theme["background"])
     total_duration = max(float(shot["end_sec"]) for shot in timeline)
     fonts = {
-        "display": _font(58),
-        "headline": _font(36),
+        "display": _font(44),
+        "headline": _font(32),
         "body": _font(25),
         "small": _font(17),
         "mono": _font(16),
         "caption": _font(22),
-        "number": _font(92),
+        "number": _font(64),
     }
     frame_index = 0
     _progress("renderer", "start scene-based rendering", current=0, total=len(timeline), detail=f"fps={fps} shots={len(timeline)}")
@@ -3538,28 +3538,22 @@ def _draw_scene_background(
 
     draw.rectangle((0, 0, width, height), fill=background)
     if stage == "split":
-        split_x = int(width * (0.46 if variant % 2 else 0.54))
-        draw.rectangle((split_x, 0, width, height), fill=_scene_color(background, 5))
-        draw.line((split_x, 96, split_x, height - 72), fill=pattern, width=1)
-        draw.rectangle((split_x - 2, 118, split_x + 2, 214), fill=accent)
+        band_y = int(height * (0.54 if variant % 2 else 0.48))
+        draw.rectangle((0, band_y, width, height), fill=_scene_color(background, 4))
+        draw.line((64, band_y, width - 64, band_y), fill=pattern, width=1)
     elif stage == "spotlight":
-        band_left = 0 if variant % 2 else int(width * 0.57)
-        band_right = int(width * 0.43) if variant % 2 else width
-        draw.rectangle((band_left, 0, band_right, height), fill=_scene_color(background, 7))
-        draw.line((band_right if variant % 2 else band_left, 0, band_right if variant % 2 else band_left, height), fill=line, width=2)
-        for y in range(138, height - 90, 64):
-            draw.line((band_left + 42, y, band_right - 42, y), fill=line, width=1)
+        band_top = 126 if variant % 2 else 154
+        band_bottom = height - 164
+        draw.rectangle((0, band_top, width, band_bottom), fill=_scene_color(background, 6))
+        draw.line((64, band_top, width - 64, band_top), fill=line, width=1)
+        draw.line((64, band_bottom, width - 64, band_bottom), fill=line, width=1)
     elif stage == "media":
-        rail_x = 42 if variant % 2 else width - 46
-        draw.rectangle((rail_x, 0, rail_x + 5, height), fill=accent)
         draw.line((0, 94, width, 94), fill=line, width=1)
         draw.line((0, height - 154, width, height - 154), fill=line, width=1)
     else:
-        shot_type = str(shot.get("shot_type") or "")
-        edge = 64 if shot_type in {"opener", "section_title"} else 64 + (variant % 3) * 34
-        draw.line((edge, 118, edge, height - 102), fill=pattern, width=1)
-        draw.rectangle((edge - 2, 164, edge + 3, 266), fill=accent)
-        draw.line((edge, height - 102, width - 72, height - 102), fill=line, width=1)
+        rule_y = height - 102
+        draw.line((64, rule_y, width - 72, rule_y), fill=line, width=1)
+        draw.rectangle((64, rule_y - 2, 214 + variant * 18, rule_y + 2), fill=accent)
 
 
 def _draw_scene_progress(
@@ -3577,7 +3571,14 @@ def _draw_scene_progress(
     shot_type = str(shot.get("shot_type") or "")
     slide_index = int(shot.get("slide_index") or 0)
     if shot_type in {"opener", "section_title"}:
-        draw.text((width - 176, 42), f"{slide_index:02d}", fill=accent, font=font)
+        _draw_single_line_text(
+            draw,
+            f"CHAPTER {slide_index:02d}",
+            (width - 260, 42),
+            font=font,
+            width=196,
+            fill=muted,
+        )
         return
     label = str(shot.get("section_label") or shot.get("headline") or "Research")
     _draw_single_line_text(draw, label.upper(), (64, 42), font=font, width=760, fill=accent)
@@ -3610,57 +3611,73 @@ def _draw_scene_composition(
     muted = (154, 177, 207)
 
     if shot_type == "opener":
-        draw.rectangle((76, 176 + y_shift, 84, 366 + y_shift), fill=accent)
+        draw.text((76, 144 + y_shift), "RESEARCH OVERVIEW", fill=accent, font=fonts["small"])
+        draw.rectangle((76, 174 + y_shift, 254, 178 + y_shift), fill=accent)
         _draw_wrapped_text(
             draw,
             str(shot.get("headline") or ""),
-            (112, 172 + y_shift),
+            (76, 202 + y_shift),
             font=fonts["display"],
-            width=880,
-            max_height=205,
+            width=760,
+            max_height=126,
             fill=fg,
-            spacing=8,
-            max_lines=4,
+            spacing=6,
+            max_lines=3,
         )
         _draw_wrapped_text(
             draw,
             str(shot.get("focus_text") or shot.get("section_label") or ""),
-            (114, 398 + y_shift),
+            (76, 350 + y_shift),
             font=fonts["body"],
-            width=760,
-            max_height=92,
+            width=720,
+            max_height=112,
             fill=muted,
             spacing=5,
-            max_lines=3,
+            max_lines=4,
         )
-        draw.text((width - 250, 366), "01", fill=accent, font=fonts["number"])
+        _draw_scene_supporting_context(
+            draw,
+            slide,
+            shot,
+            (854, 196 + y_shift, width - 76, 472),
+            accent=accent,
+            fonts=fonts,
+        )
         return
 
     if shot_type == "section_title":
         chapter = int(shot.get("slide_index") or 0)
-        draw.text((92, 154 + y_shift), f"{chapter:02d}", fill=accent, font=fonts["number"])
-        draw.rectangle((92, 282 + y_shift, 312, 287 + y_shift), fill=accent)
+        draw.text((76, 142 + y_shift), f"CHAPTER {chapter:02d}", fill=accent, font=fonts["small"])
+        draw.rectangle((76, 174 + y_shift, 248, 178 + y_shift), fill=accent)
         _draw_wrapped_text(
             draw,
             str(shot.get("headline") or ""),
-            (366, 170 + y_shift),
+            (76, 204 + y_shift),
             font=fonts["display"],
-            width=760,
-            max_height=160,
+            width=650,
+            max_height=116,
             fill=fg,
-            spacing=8,
-            max_lines=3,
+            spacing=6,
+            max_lines=2,
         )
         _draw_wrapped_text(
             draw,
             str(shot.get("focus_text") or ""),
-            (370, 350 + y_shift),
+            (76, 342 + y_shift),
             font=fonts["body"],
-            width=710,
-            max_height=104,
+            width=650,
+            max_height=126,
             fill=muted,
             spacing=6,
-            max_lines=3,
+            max_lines=4,
+        )
+        _draw_scene_supporting_context(
+            draw,
+            slide,
+            shot,
+            (794, 184 + y_shift, width - 76, 486),
+            accent=accent,
+            fonts=fonts,
         )
         return
 
@@ -3696,7 +3713,7 @@ def _draw_scene_composition(
         image_box = (70, 140, 742, height - 158)
         if not _draw_generated_image(draw, slide, image_box):
             _draw_scene_visual_fallback(draw, slide, image_box, reveal=reveal, fonts=fonts)
-        draw.rectangle((790, 176, 798, 410), fill=accent)
+        draw.rectangle((790, 176, 970, 180), fill=accent)
         _draw_wrapped_text(
             draw,
             str(shot.get("focus_text") or ""),
@@ -3734,18 +3751,78 @@ def _draw_scene_composition(
     elif shot_type == "synthesis":
         _draw_scene_takeaways(draw, slide, (92, 190, width - 92, 510), reveal=reveal, accent=accent, fonts=fonts)
     else:
-        index = int(shot.get("focus_index") or 0) + 1
-        draw.text((width - 252, 170), f"{index:02d}", fill=accent, font=fonts["number"])
+        draw.text((92, 180 + y_shift), "KEY FINDING", fill=accent, font=fonts["small"])
+        draw.rectangle((92, 212 + y_shift, 274, 216 + y_shift), fill=accent)
         _draw_wrapped_text(
             draw,
             str(shot.get("focus_text") or ""),
-            (92, 206 + y_shift),
-            font=fonts["display"],
-            width=850,
-            max_height=250,
+            (92, 244 + y_shift),
+            font=fonts["headline"],
+            width=700,
+            max_height=190,
             fill=fg,
-            spacing=8,
-            max_lines=5,
+            spacing=7,
+            max_lines=6,
+        )
+        _draw_scene_supporting_context(
+            draw,
+            slide,
+            shot,
+            (846, 176 + y_shift, width - 76, 490),
+            accent=accent,
+            fonts=fonts,
+        )
+
+
+def _draw_scene_supporting_context(
+    draw: Any,
+    slide: dict[str, Any],
+    shot: dict[str, Any],
+    box: tuple[int, int, int, int],
+    *,
+    accent: tuple[int, int, int],
+    fonts: dict[str, Any],
+) -> None:
+    """Use the available frame for paper evidence instead of decorative typography."""
+    x1, y1, x2, y2 = box
+    focus = _clean_display_text(shot.get("focus_text") or "")
+    candidates = [
+        _clean_display_text(item)
+        for item in (slide.get("bullets") or slide.get("visual_items") or [])
+        if _clean_display_text(item) and _clean_display_text(item) != focus
+    ]
+    if not candidates:
+        fallback = _clean_display_text(slide.get("visual_caption") or slide.get("purpose") or "")
+        candidates = [fallback] if fallback and fallback != focus else []
+    draw.text((x1, y1), "PAPER CONTEXT", fill=accent, font=fonts["small"])
+    draw.rectangle((x1, y1 + 32, x2, y1 + 34), fill=(40, 65, 88))
+    if not candidates:
+        _draw_wrapped_text(
+            draw,
+            "The narration develops this claim with the paper's supporting evidence.",
+            (x1, y1 + 58),
+            font=fonts["small"],
+            width=x2 - x1,
+            max_height=y2 - y1 - 58,
+            fill=(171, 190, 213),
+            spacing=4,
+            max_lines=4,
+        )
+        return
+    item_height = max(74, (y2 - y1 - 54) // min(3, len(candidates)))
+    for index, item in enumerate(candidates[:3]):
+        y = y1 + 54 + index * item_height
+        draw.text((x1, y), f"{index + 1:02d}", fill=accent, font=fonts["small"])
+        _draw_wrapped_text(
+            draw,
+            item,
+            (x1 + 42, y - 2),
+            font=fonts["small"],
+            width=x2 - x1 - 42,
+            max_height=item_height - 12,
+            fill=(207, 219, 233),
+            spacing=3,
+            max_lines=3,
         )
 
 
@@ -3767,7 +3844,8 @@ def _draw_scene_contrast(
     mid = (x1 + x2) // 2
     draw.text((x1, y1), "CONTEXT", fill=(145, 164, 187), font=fonts["small"])
     draw.text((mid + 52, y1), "IMPLICATION", fill=accent, font=fonts["small"])
-    draw.line((mid, y1, mid, y2), fill=(47, 74, 99), width=2)
+    draw.rectangle((x1, y1 + 34, mid - 54, y1 + 37), fill=(47, 74, 99))
+    draw.rectangle((mid + 52, y1 + 34, x2, y1 + 37), fill=accent)
     _draw_wrapped_text(draw, left, (x1, y1 + 62), font=fonts["headline"], width=mid - x1 - 54, max_height=220, fill=(213, 223, 236), spacing=7, max_lines=5)
     if reveal > 0.45:
         _draw_wrapped_text(draw, right, (mid + 52, y1 + 62), font=fonts["headline"], width=x2 - mid - 52, max_height=220, fill=(244, 247, 251), spacing=7, max_lines=5)
@@ -3840,7 +3918,7 @@ def _draw_scene_process_focus(
     active_w = 480
     active_x = center_x - active_w // 2
     rise = int((1.0 - reveal) * 28)
-    draw.rectangle((active_x, center_y - 112 + rise, active_x + 7, center_y + 112 + rise), fill=accent)
+    draw.rectangle((active_x, center_y - 112 + rise, active_x + 190, center_y - 108 + rise), fill=accent)
     draw.text((active_x + 42, center_y - 94 + rise), f"STEP {focus + 1:02d}", fill=accent, font=fonts["small"])
     _draw_wrapped_text(draw, items[focus], (active_x + 42, center_y - 42 + rise), font=fonts["headline"], width=active_w - 62, max_height=150, fill=(242, 246, 251), spacing=7, max_lines=4)
 
@@ -3877,8 +3955,6 @@ def _draw_scene_evidence_focus(
     column_width = max(180, (x2 - x1 - 72) // max(1, len(cells)))
     for index, cell in enumerate(cells):
         x = x1 + index * (column_width + 36)
-        if index > 0:
-            draw.line((x - 18, y1 + 82, x - 18, y2 - 16), fill=(43, 67, 90), width=1)
         _draw_wrapped_text(draw, cell, (x, y1 + 92), font=fonts["headline"] if index == 0 else fonts["body"], width=column_width, max_height=190, fill=(243, 247, 251) if index == 0 else (190, 205, 224), spacing=7, max_lines=5)
 
 
@@ -3994,13 +4070,13 @@ def _draw_scene_narration(
         return
     accent = tuple(theme["accent"])
     y = height - 126 + int((1.0 - _scene_ease(min(1.0, local / 0.28))) * 18)
-    draw.rectangle((76, y, 82, height - 48), fill=accent)
+    draw.rectangle((76, y - 12, 246, y - 8), fill=accent)
     _draw_wrapped_text(
         draw,
         narration,
-        (102, y - 2),
+        (76, y + 2),
         font=font,
-        width=width - 178,
+        width=width - 152,
         max_height=72,
         fill=(226, 236, 248),
         spacing=4,
@@ -4229,7 +4305,7 @@ def _draw_arbor_background(
                     for i in range(6)
                 ]
                 draw.line([*points, points[0]], fill=pattern, width=1)
-        draw.line((edge_start, 0, edge_start, height), fill=line, width=1)
+        draw.line((edge_start, height - 48, width, height - 48), fill=line, width=1)
     elif kind == "contours":
         band_start = int(height * 0.66)
         draw.rectangle((0, band_start, width, height), fill=(13, 22, 17))
@@ -4250,11 +4326,8 @@ def _draw_arbor_background(
                 outline=pattern,
                 width=1,
             )
-        draw.line((int(width * 0.72), 0, int(width * 0.72), height), fill=line, width=1)
+        draw.line((int(width * 0.72), height - 48, width, height - 48), fill=line, width=1)
     elif kind == "columns":
-        rail_x = 54
-        draw.rectangle((0, 0, 8, height), fill=tuple(theme["accent"]))
-        draw.line((rail_x, 0, rail_x, height), fill=pattern, width=1)
         draw.line((0, 104, width, 104), fill=line, width=1)
         draw.line((0, height - 72, width, height - 72), fill=line, width=1)
         for i in range(3):
