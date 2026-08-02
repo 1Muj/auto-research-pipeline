@@ -1585,6 +1585,23 @@ def _scene_shot_sequence(
     return sequence[:beat_count]
 
 
+def _scene_focus_index(
+    narration: str,
+    *,
+    bullets: list[str],
+    visual_items: list[str],
+    fallback: int,
+) -> int:
+    narration_folded = _clean_display_text(narration).casefold()
+    candidates = visual_items or bullets
+    for index, candidate in enumerate(candidates):
+        cleaned = _clean_display_text(candidate)
+        label = cleaned.split(":", 1)[0].strip().casefold()
+        if label and len(label) >= 3 and label in narration_folded:
+            return index
+    return min(fallback, max(0, len(candidates) - 1))
+
+
 def build_scene_timeline(
     source: dict[str, Any],
     slides: list[dict[str, Any]],
@@ -1636,6 +1653,7 @@ def build_scene_timeline(
 
         visual_kind = str(slide.get("visual_kind") or "image").lower()
         bullets = [_clean_display_text(item) for item in slide.get("bullets", []) if str(item).strip()]
+        visual_items = [_clean_visual_item(str(item)) for item in slide.get("visual_items", []) if str(item).strip()]
         generated_image_path = str(slide.get("generated_image_path") or "")
         has_generated_image = bool(generated_image_path and Path(generated_image_path).is_file())
         shot_sequence = _scene_shot_sequence(
@@ -1650,8 +1668,18 @@ def build_scene_timeline(
             is_first = beat_index == 0
             shot_type = shot_sequence[beat_index]
 
-            focus_index = min(beat_index, max(0, len(bullets) - 1))
-            focus_text = bullets[focus_index] if bullets else _clean_display_text(beat.get("text"))
+            focus_index = _scene_focus_index(
+                str(beat.get("text") or ""),
+                bullets=bullets,
+                visual_items=visual_items,
+                fallback=beat_index,
+            )
+            if focus_index < len(bullets):
+                focus_text = bullets[focus_index]
+            elif focus_index < len(visual_items):
+                focus_text = visual_items[focus_index]
+            else:
+                focus_text = _clean_display_text(beat.get("text"))
             duration = end - start
             animation_sec = min(3.2, max(1.0, duration * 0.34))
             minimum_hold_sec = min(3.0, max(1.5, duration * 0.28))
@@ -3528,7 +3556,6 @@ def _draw_scene_background(
     background = tuple(theme["background"])
     pattern = tuple(theme["pattern"])
     line = tuple(theme["line"])
-    accent = tuple(theme["accent"])
     stage = str(shot.get("background_stage") or "technical")
     variant = int(shot.get("composition_variant") or 0)
 
@@ -3550,10 +3577,6 @@ def _draw_scene_background(
     elif stage == "media":
         draw.line((0, 94, width, 94), fill=line, width=1)
         draw.line((0, height - 154, width, height - 154), fill=line, width=1)
-    else:
-        rule_y = height - 102
-        draw.line((64, rule_y, width - 72, rule_y), fill=line, width=1)
-        draw.rectangle((64, rule_y - 2, 214 + variant * 18, rule_y + 2), fill=accent)
 
 
 def _draw_scene_progress(
@@ -3907,20 +3930,79 @@ def _draw_scene_process_focus(
     if not items:
         items = ["Input", "Reason", "Generate", "Evaluate"]
     focus = min(int(shot.get("focus_index") or 0), len(items) - 1)
-    center_x = (x1 + x2) // 2
-    center_y = (y1 + y2) // 2
-    for offset, index in [(-1, focus - 1), (1, focus + 1)]:
-        if 0 <= index < len(items):
-            side_x = x1 + 36 if offset < 0 else x2 - 246
-            draw.text((side_x, center_y - 62), f"{index + 1:02d}", fill=(82, 111, 139), font=fonts["small"])
-            _draw_wrapped_text(draw, items[index], (side_x, center_y - 24), font=fonts["small"], width=210, max_height=72, fill=(141, 158, 179), spacing=4, max_lines=3)
-            draw.line((side_x, center_y + 66, side_x + 180, center_y + 66), fill=(40, 63, 85), width=1)
-    active_w = 480
-    active_x = center_x - active_w // 2
-    rise = int((1.0 - reveal) * 28)
-    draw.rectangle((active_x, center_y - 112 + rise, active_x + 190, center_y - 108 + rise), fill=accent)
-    draw.text((active_x + 42, center_y - 94 + rise), f"STEP {focus + 1:02d}", fill=accent, font=fonts["small"])
-    _draw_wrapped_text(draw, items[focus], (active_x + 42, center_y - 42 + rise), font=fonts["headline"], width=active_w - 62, max_height=150, fill=(242, 246, 251), spacing=7, max_lines=4)
+    rise = int((1.0 - reveal) * 24)
+    gap = 14
+    nav_width = (x2 - x1 - gap * (len(items) - 1)) // len(items)
+    for index, item in enumerate(items):
+        nav_x = x1 + index * (nav_width + gap)
+        active = index == focus
+        draw.rounded_rectangle(
+            (nav_x, y1 + rise, nav_x + nav_width, y1 + 72 + rise),
+            radius=6,
+            fill=(11, 26, 37) if active else (8, 17, 28),
+            outline=accent if active else (38, 63, 86),
+            width=2 if active else 1,
+        )
+        draw.text((nav_x + 14, y1 + 12 + rise), f"{index + 1:02d}", fill=accent if active else (92, 116, 143), font=fonts["small"])
+        _draw_wrapped_text(
+            draw,
+            item,
+            (nav_x + 48, y1 + 10 + rise),
+            font=fonts["small"],
+            width=nav_width - 60,
+            max_height=50,
+            fill=(235, 242, 250) if active else (151, 169, 191),
+            spacing=2,
+            max_lines=2,
+        )
+
+    detail = _scene_item_detail(slide, items[focus])
+    detail_y = y1 + 116 + rise
+    draw.text((x1, detail_y), f"CURRENT FOCUS  {focus + 1:02d}", fill=accent, font=fonts["small"])
+    draw.rectangle((x1, detail_y + 32, x1 + 178, detail_y + 36), fill=accent)
+    _draw_wrapped_text(
+        draw,
+        items[focus],
+        (x1, detail_y + 58),
+        font=fonts["headline"],
+        width=430,
+        max_height=112,
+        fill=(242, 246, 251),
+        spacing=6,
+        max_lines=3,
+    )
+    detail_x = x1 + 510
+    draw.text((detail_x, detail_y), "WHAT IT MEASURES", fill=accent, font=fonts["small"])
+    draw.rectangle((detail_x, detail_y + 32, x2, detail_y + 34), fill=(44, 72, 97))
+    _draw_wrapped_text(
+        draw,
+        detail,
+        (detail_x, detail_y + 58),
+        font=fonts["body"],
+        width=x2 - detail_x,
+        max_height=120,
+        fill=(206, 219, 234),
+        spacing=5,
+        max_lines=4,
+    )
+
+
+def _scene_item_detail(slide: dict[str, Any], item: str) -> str:
+    label = _clean_display_text(item).split(":", 1)[0].strip()
+    note = _clean_display_text(slide.get("speaker_note") or "")
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?。！？])\s+", note) if part.strip()]
+    for sentence in sentences:
+        if label and label.casefold() in sentence.casefold():
+            return sentence
+    for bullet in slide.get("bullets") or []:
+        cleaned = _clean_display_text(bullet)
+        if label and label.casefold() in cleaned.casefold():
+            return cleaned
+    return _clean_display_text(
+        slide.get("visual_caption")
+        or slide.get("purpose")
+        or "This stage contributes evidence to the paper's evaluation pipeline."
+    )
 
 
 def _draw_scene_evidence(

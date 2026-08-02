@@ -11,6 +11,8 @@ from auto_research.video_pipeline import (
     _clean_display_text,
     _draw_generated_image,
     _image_generation_prompt,
+    _scene_focus_index,
+    _scene_item_detail,
 )
 
 
@@ -21,6 +23,42 @@ def test_display_text_removes_ellipsis_without_cutting_content() -> None:
     assert "…" not in text
     assert "supporting evidence" in text
     assert text.endswith("conclusion.")
+
+
+def test_process_focus_uses_the_matching_paper_explanation() -> None:
+    slide = {
+        "bullets": ["PresentQuiz tests knowledge retention via questions."],
+        "speaker_note": (
+            "PresentArena compares videos pairwise. "
+            "PresentQuiz evaluates knowledge conveyance by asking questions derived from the paper."
+        ),
+        "purpose": "Explain the evaluation metrics.",
+    }
+
+    detail = _scene_item_detail(slide, "PresentQuiz: Knowledge Retention")
+
+    assert detail.startswith("PresentQuiz evaluates knowledge conveyance")
+    assert "questions derived from the paper" in detail
+
+
+def test_scene_focus_follows_the_metric_named_by_narration() -> None:
+    index = _scene_focus_index(
+        "PresentArena uses VideoLLMs as proxy audiences for pairwise comparisons.",
+        bullets=[
+            "Meta Similarity measures alignment.",
+            "PresentArena performs pairwise comparison.",
+            "PresentQuiz tests retention.",
+        ],
+        visual_items=[
+            "Meta Similarity: Alignment",
+            "PresentArena: Pairwise Comparison",
+            "PresentQuiz: Knowledge Retention",
+            "IP Memory: Author Impact",
+        ],
+        fallback=2,
+    )
+
+    assert index == 1
 
 
 def test_image_prompt_is_specific_and_requires_complete_framing() -> None:
