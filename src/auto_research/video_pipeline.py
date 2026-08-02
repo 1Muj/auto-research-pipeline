@@ -14,6 +14,7 @@ import subprocess
 import textwrap
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -779,19 +780,28 @@ def synthesize_tts_audio(talker: dict[str, Any], out_dir: Path, *, use_tts: bool
         result["error"] = "disabled"
         _progress("tts_builder", "skipped", detail="--use-tts is off")
         return result
-    key = _lumid_api_key() or os.environ.get("OPENAI_API_KEY")
-    if not key:
-        result["error"] = "missing LUM_API_KEY"
-        _progress("tts_builder", "failed", detail=result["error"])
-        return result
     if not text:
         result["error"] = "empty narration text"
         _progress("tts_builder", "failed", detail=result["error"])
         return result
+    out = out_dir / "narration.mp3"
+    model = str(result["model"])
+    _progress("tts_builder", "request speech synthesis", detail=f"model={model} chars={len(text[:12000])}")
+    ok, error = _synthesize_tts_clip(text, out)
+    result["ok"] = ok
+    result["error"] = error
+    result["path"] = str(out.resolve()) if ok else ""
+    _progress("tts_builder", "speech synthesis done" if ok else "speech synthesis failed", detail=f"path={result['path']} error={error[:120]}")
+    return result
+
+
+def _synthesize_tts_clip(text: str, out: Path) -> tuple[bool, str]:
+    key = _lumid_api_key() or os.environ.get("OPENAI_API_KEY")
+    if not key:
+        return False, "missing LUM_API_KEY"
     base_url = _lumid_base_url()
     timeout = float(os.environ.get("AUTO_VIDEO_TTS_TIMEOUT", os.environ.get("AUTO_VIDEO_API_TIMEOUT", "120")))
-    model = str(result["model"])
-    out = out_dir / "narration.mp3"
+    model = os.environ.get("LUMID_TTS_MODEL") or os.environ.get("LUM_TTS_MODEL") or LUMID_TTS_MODEL
     body = {
         "model": model,
         "input": text,
@@ -799,7 +809,6 @@ def synthesize_tts_audio(talker: dict[str, Any], out_dir: Path, *, use_tts: bool
         "response_format": "mp3",
     }
     try:
-        _progress("tts_builder", "request speech synthesis", detail=f"model={model} chars={len(text[:12000])}")
         headers, raw = _post_bytes(f"{base_url}/audio/speech", key, body, timeout)
         content_type = headers.get("content-type", "")
         if "application/json" in content_type:
@@ -810,17 +819,138 @@ def synthesize_tts_audio(talker: dict[str, Any], out_dir: Path, *, use_tts: bool
             elif data.get("url"):
                 out.write_bytes(_get_bytes(str(data["url"]), timeout))
             else:
-                result["error"] = "JSON response did not contain audio"
-                return result
+                return False, "JSON response did not contain audio"
         else:
             out.write_bytes(raw)
-        result["ok"] = out.is_file() and out.stat().st_size > 0
-        result["path"] = str(out.resolve()) if result["ok"] else ""
-        _progress("tts_builder", "speech synthesis done" if result["ok"] else "speech synthesis empty", detail=f"path={result['path']}")
+        ok = out.is_file() and out.stat().st_size > 0
+        return ok, "" if ok else "speech synthesis returned empty audio"
     except Exception as exc:
-        result["error"] = str(exc)[:300]
-        _progress("tts_builder", "speech synthesis failed", detail=f"{type(exc).__name__}: {str(exc)[:160]}")
-    return result
+        return False, f"{type(exc).__name__}: {str(exc)[:260]}"
+
+
+def synthesize_tts_segments(
+    subtitles: list[dict[str, Any]],
+    out_dir: Path,
+    *,
+    use_tts: bool,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    result: dict[str, Any] = {
+        "ok": False,
+        "model": os.environ.get("LUMID_TTS_MODEL") or os.environ.get("LUM_TTS_MODEL") or LUMID_TTS_MODEL,
+        "path": "",
+        "provider": "lumid-qwen-tts",
+        "timing_mode": "segment_exact",
+        "speech_tempo": float(os.environ.get("AUTO_VIDEO_TTS_TEMPO", "0.90")),
+        "pre_speech_hold_sec": float(os.environ.get("AUTO_VIDEO_PRE_SPEECH_HOLD_SEC", "0.35")),
+        "post_speech_hold_sec": float(os.environ.get("AUTO_VIDEO_POST_SPEECH_HOLD_SEC", "1.20")),
+        "segments": [],
+        "error": "",
+    }
+    if not use_tts:
+        result["error"] = "disabled"
+        return result, subtitles
+    if not subtitles or shutil.which("ffmpeg") is None:
+        result["error"] = "missing subtitles or ffmpeg"
+        return result, subtitles
+    if not (_lumid_api_key() or os.environ.get("OPENAI_API_KEY")):
+        result["error"] = "missing LUM_API_KEY"
+        return result, subtitles
+
+    tempo = max(0.7, min(1.0, float(result["speech_tempo"])))
+    pre_hold = max(0.0, min(2.0, float(result["pre_speech_hold_sec"])))
+    post_hold = max(0.5, min(4.0, float(result["post_speech_hold_sec"])))
+    segment_dir = out_dir / "narration_segments"
+    segment_dir.mkdir(parents=True, exist_ok=True)
+    jobs: list[tuple[int, str, Path]] = []
+    for index, subtitle in enumerate(subtitles):
+        text = _prepare_tts_text(str(subtitle.get("text") or "").strip())
+        jobs.append((index, text, segment_dir / f"raw_{index:03d}.mp3"))
+
+    def generate(job: tuple[int, str, Path]) -> tuple[int, bool, str, Path]:
+        index, text, path = job
+        if not text:
+            return index, False, "empty subtitle", path
+        ok, error = _synthesize_tts_clip(text, path)
+        return index, ok, error, path
+
+    workers = max(1, min(4, int(os.environ.get("AUTO_VIDEO_TTS_WORKERS", "2"))))
+    _progress("tts_builder", "generate timed narration segments", current=0, total=len(jobs), detail=f"workers={workers} tempo={tempo:.2f}")
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        generated = list(pool.map(generate, jobs))
+    generated.sort(key=lambda item: item[0])
+
+    concat_paths: list[Path] = []
+    synced: list[dict[str, Any]] = []
+    cursor = 0.0
+    segment_reports: list[dict[str, Any]] = []
+    for index, ok, error, raw_path in generated:
+        if not ok:
+            result["error"] = f"segment {index + 1} failed: {error}"
+            return result, subtitles
+        raw_duration = media_duration_seconds(raw_path)
+        if not raw_duration:
+            result["error"] = f"segment {index + 1} has no measurable duration"
+            return result, subtitles
+        speech_duration = raw_duration / tempo
+        target_duration = pre_hold + speech_duration + post_hold
+        wav_path = segment_dir / f"timed_{index:03d}.wav"
+        delay_ms = int(round(pre_hold * 1000))
+        filter_chain = f"atempo={tempo:.4f},adelay={delay_ms}|{delay_ms},apad=pad_dur={post_hold:.4f}"
+        proc = subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", str(raw_path), "-af", filter_chain,
+                "-t", f"{target_duration:.4f}", "-ar", "44100", "-ac", "2",
+                "-c:a", "pcm_s16le", str(wav_path),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        actual_duration = media_duration_seconds(wav_path) if proc.returncode == 0 else None
+        if not actual_duration:
+            result["error"] = f"segment {index + 1} timing conversion failed"
+            return result, subtitles
+        updated = dict(subtitles[index])
+        updated["start_sec"] = round(cursor, 3)
+        updated["speech_start_sec"] = round(cursor + pre_hold, 3)
+        updated["speech_end_sec"] = round(cursor + pre_hold + speech_duration, 3)
+        cursor += actual_duration
+        updated["end_sec"] = round(cursor, 3)
+        synced.append(updated)
+        concat_paths.append(wav_path)
+        segment_reports.append(
+            {
+                "index": index,
+                "slide_index": updated.get("slide_index"),
+                "text": updated.get("text", ""),
+                "raw_duration_sec": round(raw_duration, 3),
+                "speech_duration_sec": round(speech_duration, 3),
+                "timeline_duration_sec": round(actual_duration, 3),
+                "start_sec": updated["start_sec"],
+                "end_sec": updated["end_sec"],
+            }
+        )
+
+    concat_file = segment_dir / "concat.txt"
+    concat_file.write_text("".join(f"file '{path.as_posix()}'\n" for path in concat_paths), encoding="utf-8")
+    narration_path = out_dir / "narration.mp3"
+    proc = subprocess.run(
+        [
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file),
+            "-c:a", "libmp3lame", "-b:a", "192k", "-ar", "44100", "-ac", "2", str(narration_path),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    result["ok"] = proc.returncode == 0 and narration_path.is_file() and narration_path.stat().st_size > 0
+    result["path"] = str(narration_path.resolve()) if result["ok"] else ""
+    result["segments"] = segment_reports
+    result["total_duration_sec"] = round(cursor, 3)
+    if not result["ok"]:
+        result["error"] = "failed to concatenate timed narration segments"
+    _progress("tts_builder", "timed narration ready" if result["ok"] else "timed narration failed", current=len(jobs), total=len(jobs), detail=f"duration={cursor:.2f}s")
+    return result, synced
 
 
 def mux_audio_into_video(video_path: Path, audio_path: Path) -> bool:
@@ -946,6 +1076,20 @@ def scale_timeline_to_duration(
         return scaled
 
     return scale_items(subtitles), scale_items(cursor_plan), scale
+
+
+def align_cursor_plan_to_subtitles(
+    cursor_plan: list[dict[str, Any]],
+    subtitles: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    aligned: list[dict[str, Any]] = []
+    for index, item in enumerate(cursor_plan):
+        updated = dict(item)
+        if index < len(subtitles):
+            updated["start_sec"] = subtitles[index]["start_sec"]
+            updated["end_sec"] = subtitles[index]["end_sec"]
+        aligned.append(updated)
+    return aligned
 
 
 def _json_from_model(text: str | None) -> dict[str, Any] | None:
@@ -1521,6 +1665,8 @@ def build_scene_timeline(
                     "shot_index": beat_index + 1,
                     "start_sec": round(start, 3),
                     "end_sec": round(end, 3),
+                    "speech_start_sec": round(float(beat.get("speech_start_sec") or start), 3),
+                    "speech_end_sec": round(float(beat.get("speech_end_sec") or end), 3),
                     "duration_sec": round(end - start, 3),
                     "animation_sec": round(animation_sec, 3),
                     "hold_sec": round(hold_sec, 3),
@@ -3316,8 +3462,15 @@ def _render_scene_mp4_video(
                 font=fonts["caption"],
             )
 
-            enter = _scene_ease(min(1.0, local / 0.16))
-            exit_alpha = _scene_ease(min(1.0, max(0.0, (1.0 - local) / 0.08)))
+            enter_fraction = min(1.0, 0.45 / max(0.001, duration))
+            enter = _scene_ease(min(1.0, local / max(0.001, enter_fraction)))
+            exit_fade_sec = max(0.0, float(os.environ.get("AUTO_VIDEO_EXIT_FADE_SEC", "0")))
+            exit_fraction = min(1.0, exit_fade_sec / max(0.001, duration)) if exit_fade_sec else 0.0
+            exit_alpha = (
+                _scene_ease(min(1.0, max(0.0, (1.0 - local) / max(0.001, exit_fraction))))
+                if exit_fraction
+                else 1.0
+            )
             alpha = max(0.18, min(enter, exit_alpha))
             if alpha < 1.0:
                 img = Image.blend(background_frame, img, alpha)
@@ -4940,20 +5093,28 @@ def run_video_pipeline(
         encoding="utf-8",
     )
     _progress("pipeline", "synthesize narration audio", current=7, total=12)
-    tts_result = synthesize_tts_audio(talker, out_dir, use_tts=use_tts)
+    tts_result, timed_subtitles = synthesize_tts_segments(subtitles, out_dir, use_tts=use_tts)
     timeline_scale = 1.0
     audio_duration = None
     if tts_result.get("ok"):
+        original_duration = max((float(item["end_sec"]) for item in subtitles), default=0.0)
+        subtitles = timed_subtitles
+        cursor_plan = align_cursor_plan_to_subtitles(cursor_plan, subtitles)
         talker["audio_path"] = tts_result.get("path", "")
         talker["audio_generated"] = True
         audio_duration = media_duration_seconds(Path(str(tts_result["path"])))
-        if audio_duration:
-            subtitles, cursor_plan, timeline_scale = scale_timeline_to_duration(
-                subtitles,
-                cursor_plan,
-                audio_duration,
-            )
-            _progress("timeline", "scaled subtitles/cursor to audio", detail=f"audio_duration={audio_duration:.3f}s scale={timeline_scale:.4f}")
+        synced_duration = max((float(item["end_sec"]) for item in subtitles), default=0.0)
+        timeline_scale = synced_duration / original_duration if original_duration > 0 else 1.0
+        _progress("timeline", "aligned scenes to measured TTS segments", detail=f"audio_duration={audio_duration or 0:.3f}s timeline={synced_duration:.3f}s")
+    elif use_tts:
+        _progress("tts_builder", "segment timing failed; falling back to whole-track TTS", detail=str(tts_result.get("error") or ""))
+        tts_result = synthesize_tts_audio(talker, out_dir, use_tts=True)
+        if tts_result.get("ok"):
+            talker["audio_path"] = tts_result.get("path", "")
+            talker["audio_generated"] = True
+            audio_duration = media_duration_seconds(Path(str(tts_result["path"])))
+            if audio_duration:
+                subtitles, cursor_plan, timeline_scale = scale_timeline_to_duration(subtitles, cursor_plan, audio_duration)
     (out_dir / "tts_generation.json").write_text(
         json.dumps(tts_result, indent=2, ensure_ascii=False),
         encoding="utf-8",
@@ -4965,6 +5126,14 @@ def run_video_pipeline(
     write_srt(subtitles, out_dir / "subtitles.srt")
     (out_dir / "cursor_plan.json").write_text(
         json.dumps(cursor_plan, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (out_dir / "storyboard.json").write_text(
+        json.dumps(
+            {"slides": slides, "subtitles": subtitles, "cursor_plan": cursor_plan, "talker_plan": talker},
+            indent=2,
+            ensure_ascii=False,
+        ),
         encoding="utf-8",
     )
     scene_timeline = build_scene_timeline(source, slides, subtitles)
@@ -5068,6 +5237,9 @@ def run_video_pipeline(
         "tts_requested": use_tts,
         "tts_audio_generated": bool(tts_result.get("ok")),
         "tts_audio_path": tts_result.get("path", ""),
+        "tts_timing_mode": tts_result.get("timing_mode", "whole_track_scaled"),
+        "tts_speech_tempo": tts_result.get("speech_tempo"),
+        "tts_post_speech_hold_sec": tts_result.get("post_speech_hold_sec"),
         "audio_muxed": audio_muxed,
         "talking_head_provider": talker.get("talking_head_provider", ""),
         "talker_api_ready": talker["api_ready"],

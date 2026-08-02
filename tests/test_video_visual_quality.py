@@ -106,7 +106,7 @@ def test_scene_timeline_splits_slides_into_video_shots() -> None:
         },
     ]
     subtitles = [
-        {"slide_index": 1, "start_sec": 0, "end_sec": 6, "text": "The project begins with one research question."},
+        {"slide_index": 1, "start_sec": 0, "speech_start_sec": 0.3, "speech_end_sec": 5.0, "end_sec": 6, "text": "The project begins with one research question."},
         {"slide_index": 2, "start_sec": 6, "end_sec": 11, "text": "First parse the evidence."},
         {"slide_index": 2, "start_sec": 11, "end_sec": 16, "text": "Then animate the planned shots."},
     ]
@@ -115,6 +115,8 @@ def test_scene_timeline_splits_slides_into_video_shots() -> None:
 
     assert len(timeline) == 3
     assert timeline[0]["shot_type"] == "opener"
+    assert timeline[0]["speech_start_sec"] == 0.3
+    assert timeline[0]["speech_end_sec"] == 5.0
     assert timeline[1]["shot_type"] == "process"
     assert timeline[-1]["shot_type"] == "synthesis"
     assert timeline[-1]["motion"] == "takeaway_stack"

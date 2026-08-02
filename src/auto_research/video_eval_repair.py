@@ -19,8 +19,10 @@ from auto_research.video_pipeline import (
     media_duration_seconds,
     mux_audio_into_video,
     render_mp4_video,
+    align_cursor_plan_to_subtitles,
     scale_timeline_to_duration,
     synthesize_tts_audio,
+    synthesize_tts_segments,
     write_preview_html,
     write_srt,
 )
@@ -232,19 +234,26 @@ def repair_video_artifacts(
     subtitles = build_subtitles(cleaned_slides, seconds_per_slide=seconds_per_slide)
     cursor_plan = build_cursor_plan(subtitles, slides=cleaned_slides, source=source, out_dir=artifact_dir)
     talker = build_talker_plan(subtitles)
-    tts_result = synthesize_tts_audio(talker, artifact_dir, use_tts=use_tts)
+    tts_result, timed_subtitles = synthesize_tts_segments(subtitles, artifact_dir, use_tts=use_tts)
     audio_duration = None
     timeline_scale = 1.0
     if tts_result.get("ok"):
+        original_duration = max((float(item["end_sec"]) for item in subtitles), default=0.0)
+        subtitles = timed_subtitles
+        cursor_plan = align_cursor_plan_to_subtitles(cursor_plan, subtitles)
         talker["audio_path"] = tts_result.get("path", "")
         talker["audio_generated"] = True
         audio_duration = media_duration_seconds(Path(str(tts_result["path"])))
-        if audio_duration:
-            subtitles, cursor_plan, timeline_scale = scale_timeline_to_duration(
-                subtitles,
-                cursor_plan,
-                audio_duration,
-            )
+        synced_duration = max((float(item["end_sec"]) for item in subtitles), default=0.0)
+        timeline_scale = synced_duration / original_duration if original_duration > 0 else 1.0
+    elif use_tts:
+        tts_result = synthesize_tts_audio(talker, artifact_dir, use_tts=True)
+        if tts_result.get("ok"):
+            talker["audio_path"] = tts_result.get("path", "")
+            talker["audio_generated"] = True
+            audio_duration = media_duration_seconds(Path(str(tts_result["path"])))
+            if audio_duration:
+                subtitles, cursor_plan, timeline_scale = scale_timeline_to_duration(subtitles, cursor_plan, audio_duration)
 
     repaired_storyboard = {
         "slides": cleaned_slides,
@@ -277,6 +286,9 @@ def repair_video_artifacts(
         "video_path": str(video_path) if rendered else "",
         "tts_requested": use_tts,
         "tts_audio_generated": bool(tts_result.get("ok")),
+        "tts_timing_mode": tts_result.get("timing_mode", "whole_track_scaled"),
+        "tts_speech_tempo": tts_result.get("speech_tempo"),
+        "tts_post_speech_hold_sec": tts_result.get("post_speech_hold_sec"),
         "audio_duration_sec": round(audio_duration, 3) if audio_duration else None,
         "timeline_scale": round(timeline_scale, 4),
         "audio_muxed": audio_muxed,

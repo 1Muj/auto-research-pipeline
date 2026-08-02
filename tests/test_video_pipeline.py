@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
+import auto_research.video_pipeline as video_pipeline
 from auto_research.video_pipeline import (
     _clean_vision_response_content,
     _text_model_provider,
     build_slides,
+    media_duration_seconds,
+    synthesize_tts_segments,
 )
 
 
@@ -30,6 +34,42 @@ def test_vision_response_removes_generated_audio_payload() -> None:
 
     assert _clean_vision_response_content(value) == "The image contains six panels."
     assert _clean_vision_response_content("(qwen-omni error: 500 Internal Server Error)") is None
+
+
+def test_segment_tts_uses_measured_audio_and_post_speech_hold(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LUM_API_KEY", "test-key")
+    monkeypatch.setenv("AUTO_VIDEO_TTS_TEMPO", "1.0")
+    monkeypatch.setenv("AUTO_VIDEO_PRE_SPEECH_HOLD_SEC", "0.2")
+    monkeypatch.setenv("AUTO_VIDEO_POST_SPEECH_HOLD_SEC", "0.8")
+    monkeypatch.setenv("AUTO_VIDEO_TTS_WORKERS", "1")
+
+    def fake_tts_clip(_text: str, out: Path) -> tuple[bool, str]:
+        proc = subprocess.run(
+            [
+                "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
+                "-t", "1.0", "-c:a", "libmp3lame", str(out),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return proc.returncode == 0 and out.is_file(), ""
+
+    monkeypatch.setattr(video_pipeline, "_synthesize_tts_clip", fake_tts_clip)
+    subtitles = [
+        {"slide_index": 1, "start_sec": 0, "end_sec": 5, "text": "First sentence."},
+        {"slide_index": 1, "start_sec": 5, "end_sec": 10, "text": "Second sentence."},
+    ]
+
+    result, synced = synthesize_tts_segments(subtitles, tmp_path, use_tts=True)
+
+    assert result["ok"] is True
+    assert synced[1]["start_sec"] == synced[0]["end_sec"]
+    assert synced[0]["speech_start_sec"] >= synced[0]["start_sec"] + 0.19
+    assert synced[0]["end_sec"] >= synced[0]["speech_end_sec"] + 0.74
+    total_audio = media_duration_seconds(Path(result["path"]))
+    assert total_audio is not None
+    assert abs(total_audio - synced[-1]["end_sec"]) < 0.15
 
 
 def test_video_slide_builder_adds_rich_visual_types() -> None:

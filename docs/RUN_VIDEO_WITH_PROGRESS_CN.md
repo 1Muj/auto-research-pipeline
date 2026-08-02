@@ -107,7 +107,9 @@ AUTO_VIDEO_THEME=orbit ./scripts/run_video_with_eval.sh
 - 普通镜头至少 5 秒；开场 6–8 秒；流程和证据镜头至少 8 秒；指标镜头 6–8 秒。
 - 少于 12 秒的一段旁白不会为了增加镜头数而强拆。
 - 主动画通常在前 1–3.2 秒完成，之后至少保留 1.5 秒稳定阅读时间。
-- 开启 TTS 后，真实音频时长优先，字幕和镜头时间轴会按音频统一缩放。
+- 开启 TTS 后，每条字幕会独立合成并测量真实音频时长，镜头不会在本句读完前切换。
+- 默认语音按 `0.90x` 放慢，每句开始前留 `0.35` 秒入场，读完后再保持 `1.20` 秒供观众阅读。
+- 最终旁白由这些定时片段拼接，字幕、镜头和音频共用同一组起止时间，不再按整段总时长等比猜测。
 
 可以用环境变量调整整体速度：
 
@@ -118,6 +120,8 @@ AUTO_VIDEO_CJK_CHARS_PER_SEC=3.6 \
 AUTO_VIDEO_MIN_BEAT_SEC=6 \
 AUTO_VIDEO_MIN_SHOT_SEC=6 \
 AUTO_VIDEO_SPLIT_BEAT_SEC=14 \
+AUTO_VIDEO_TTS_TEMPO=0.88 \
+AUTO_VIDEO_POST_SPEECH_HOLD_SEC=1.5 \
 ./scripts/run_video_with_eval.sh
 ```
 

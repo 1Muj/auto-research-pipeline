@@ -76,6 +76,7 @@ DEFAULT_DIMENSIONS = [
             "Subtitles, visual focus, layer animation, and key frames support the spoken point.",
             "There is no repeated pattern of saying one thing while showing another.",
             "Shot changes and visual reveals occur when the narration changes semantic focus.",
+            "No shot ends before its measured speech_end_sec; the completed scene remains visible briefly after speech finishes.",
             "Most explanatory shots remain readable for about 5 seconds or longer unless the content is intentionally brief.",
         ],
         "high_signals": ["shot-speech match", "good timing", "useful visual focus"],
@@ -773,6 +774,8 @@ def summarize_artifact_context(artifact_context: dict[str, Any]) -> dict[str, An
             "slide_index": item.get("slide_index"),
             "start_sec": item.get("start_sec"),
             "end_sec": item.get("end_sec"),
+            "speech_start_sec": item.get("speech_start_sec"),
+            "speech_end_sec": item.get("speech_end_sec"),
             "text": _truncate_text(item.get("text"), 260),
         }
         for item in subtitles[:24]
