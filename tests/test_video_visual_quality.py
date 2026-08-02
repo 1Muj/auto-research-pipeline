@@ -5,14 +5,19 @@ from PIL import Image, ImageDraw
 from auto_research.video_pipeline import (
     PAPER_VISUAL_THEMES,
     _estimate_narration_duration,
+    _apply_scene_entrance,
     build_scene_timeline,
     build_subtitles,
     choose_paper_visual_theme,
     _clean_display_text,
     _draw_generated_image,
     _image_generation_prompt,
+    _metric_cards_from_items,
+    _metric_card_focus,
+    _normalize_slide,
     _scene_focus_index,
     _scene_item_detail,
+    plan_scene_directions,
 )
 
 
@@ -59,6 +64,72 @@ def test_scene_focus_follows_the_metric_named_by_narration() -> None:
     )
 
     assert index == 1
+
+
+def test_duplicate_placeholder_table_is_replaced_with_grounded_rows() -> None:
+    slide = _normalize_slide(
+        1,
+        {
+            "title": "Parallel Generation Speed",
+            "purpose": "Highlight the efficiency gain.",
+            "bullets": ["Parallel generation achieves a 6x speedup."],
+            "visual_kind": "metrics",
+            "visual_items": ["Sequential time", "Parallel time", "6x speedup"],
+            "visual_table": [
+                ["Aspect", "Focus", "Why it matters"],
+                ["Architecture", "Architecture", "Keeps the demo grounded"],
+            ],
+        },
+    )
+
+    assert slide["visual_table"][1][0] == "Point 1"
+    assert "6x speedup" in slide["visual_table"][1][1]
+    assert "Architecture" not in " ".join(slide["visual_table"][1])
+
+
+def test_metric_parser_recognizes_speedup_factor() -> None:
+    cards = _metric_cards_from_items(["PaperTalker achieves a 6x speedup over sequential generation."])
+
+    assert cards[0][0].lower() == "6x"
+
+
+def test_metric_card_focus_uses_named_method_over_generic_words() -> None:
+    cards = _metric_cards_from_items(
+        ["Sequential Generation Time", "PaperTalker Parallel Time", "6x Speedup Indicator"]
+    )
+
+    focus = _metric_card_focus(
+        cards,
+        "PaperTalker parallelizes generation across slides.",
+        fallback=0,
+    )
+
+    assert cards[focus][1] == "PaperTalker Parallel Time"
+
+
+def test_scene_director_fallback_varies_layouts_and_entrances() -> None:
+    slides, report = plan_scene_directions(
+        {"title": "Director Test"},
+        [
+            {"index": 1, "title": "Mechanism", "purpose": "Explain modules", "bullets": ["A module."], "visual_kind": "flow"},
+            {"index": 2, "title": "Speed", "purpose": "Compare speed", "bullets": ["A 6x speedup."], "visual_kind": "metrics"},
+            {"index": 3, "title": "Evidence", "purpose": "Show results", "bullets": ["An experiment."], "visual_kind": "table"},
+        ],
+        use_api=False,
+    )
+
+    assert report["mode"] == "deterministic_fallback"
+    assert len({slide["scene_direction"]["layout"] for slide in slides}) == 3
+    assert len({slide["scene_direction"]["entrance"] for slide in slides}) == 3
+
+
+def test_scene_entrances_produce_distinct_intermediate_frames() -> None:
+    layer = Image.new("RGBA", (120, 80), (0, 0, 0, 0))
+    ImageDraw.Draw(layer).rectangle((10, 10, 50, 50), fill=(255, 255, 255, 255))
+
+    frames = [_apply_scene_entrance(layer, entrance, 0.5) for entrance in ("fade_up", "slide_left", "slide_right", "scale_in", "wipe")]
+
+    assert len({frame.tobytes() for frame in frames}) == 5
 
 
 def test_image_prompt_is_specific_and_requires_complete_framing() -> None:

@@ -268,6 +268,23 @@ jq '.evaluation | {
 [video 0240s] renderer           start ffmpeg encoding | frames=5256 fps=24
 ```
 
+## 大模型场景导演与多动画
+
+完整流程默认会额外调用一次文本模型，为每个章节选择受控的场景方向。可用版式包括 `editorial`、`comparison`、`data_wall`、`timeline`、`evidence_grid`、`diagram_focus`；可用入场动画包括 `fade_up`、`slide_left`、`slide_right`、`scale_in`、`wipe`。模型只负责提出内容重点和方向，最终坐标、边界与可读性仍由本地渲染器控制。
+
+生成结果保存在：
+
+```text
+$OUT/scene_direction.json
+$OUT/scene_timeline.json
+```
+
+如需关闭额外的场景导演模型调用：
+
+```bash
+AUTO_VIDEO_USE_SCENE_DIRECTOR=0 ./scripts/run_video_with_eval.sh
+```
+
 ## 查看是否还在跑
 
 ```bash

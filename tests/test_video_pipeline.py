@@ -95,7 +95,8 @@ def test_video_slide_builder_adds_rich_visual_types() -> None:
         "image",
     ]
     assert all(slide["visual_caption"] for slide in slides)
-    assert slides[2]["visual_table"][0] == ["Aspect", "Focus", "Why it matters"]
+    assert slides[2]["visual_table"][0] == ["Claim", "Paper evidence", "Presentation role"]
+    assert all(len(set(row)) == len(row) for row in slides[2]["visual_table"][1:])
 
 
 def test_video_build_cli_writes_artifacts(tmp_path: Path) -> None:

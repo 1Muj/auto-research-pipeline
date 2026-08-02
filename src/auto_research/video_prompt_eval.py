@@ -46,7 +46,15 @@ DEFAULT_DIMENSIONS = [
             "Consecutive shots use meaningfully different compositions when the narrative function changes, rather than repeatedly animating one interface template.",
         ],
         "high_signals": ["legible scenes", "clear hierarchy", "useful visuals", "progressive reveal"],
-        "low_signals": ["tiny text", "static PPT framing", "repeated interface template", "irrelevant visuals", "weak hierarchy"],
+        "low_signals": [
+            "tiny text",
+            "static PPT framing",
+            "repeated interface template",
+            "duplicate labels or placeholder table cells",
+            "the same entrance animation across consecutive shots",
+            "irrelevant visuals",
+            "weak hierarchy",
+        ],
     },
     {
         "id": "audio_narration_quality",

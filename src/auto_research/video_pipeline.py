@@ -1194,13 +1194,15 @@ def build_slides(source: dict[str, Any], *, max_slides: int, use_api: bool) -> l
             f"""
             Convert this {source['kind']} into a PPT explanation video storyboard.
             Return JSON only:
-            {{"slide_count":{target_slides},"slides":[{{"title":"...","bullets":["..."],"speaker_note":"...","visual_prompt":"...","visual_kind":"image|flow|table|metrics","visual_caption":"...","visual_items":["..."],"visual_table":[["Metric","Value","Meaning"]]}}]}}
+            {{"slide_count":{target_slides},"slides":[{{"title":"...","bullets":["..."],"speaker_note":"...","visual_prompt":"...","visual_kind":"image|flow|table|metrics","visual_caption":"...","visual_items":["..."],"visual_table":[["Metric","Value","Meaning"]],"scene_direction":{{"layout":"editorial|comparison|data_wall|timeline|evidence_grid|diagram_focus","entrance":"fade_up|slide_left|slide_right|scale_in|wipe","emphasis":"specific content to emphasize"}}}}]}}
             Create exactly {target_slides} slides. The hard maximum configured by the user is {max_slides}.
             Make each bullet a complete, concrete sentence under 24 words.
             Do not use ellipses, half sentences, fake code, terminal text, or placeholder UI text.
             Keep speaker_note detailed enough for narration, about 80-120 words per slide.
             Include concrete paper details such as dataset size, builders, metrics, modules, or reported findings when present.
             Vary the visual_kind across image, flow, table, and metrics.
+            Vary scene_direction layout and entrance across adjacent slides. Choose comparison for before/after or speed results, data_wall for several statistics, timeline for ordered stages, evidence_grid for tables, and diagram_focus for mechanisms.
+            The emphasis must name a concrete claim, number, figure, module, or relationship from this slide. Never use generic labels such as Architecture, Aspect, or Keeps the demo grounded.
             Prefer diagrams, tables, metric summaries, and conceptual visuals over screenshots.
             Keep all content grounded in the source.
 
@@ -1271,6 +1273,9 @@ def _normalize_slide(index: int, item: Any) -> dict[str, Any]:
     normalized_bullets = [_clean_display_text(b) for b in bullets if _clean_display_text(b)]
     if len(normalized_bullets) > 3:
         normalized_bullets = [*normalized_bullets[:2], " ".join(normalized_bullets[2:])]
+    normalized_table = _normalize_visual_table(visual_table)
+    if not _visual_table_is_meaningful(normalized_table):
+        normalized_table = _visual_table(section, normalized_bullets, [])
     return {
         "index": index,
         "title": _clean_display_text(item.get("title") or f"{index}. Slide"),
@@ -1284,9 +1289,51 @@ def _normalize_slide(index: int, item: Any) -> dict[str, Any]:
         ),
         "visual_items": [_clean_visual_item(str(v)) for v in visual_items[:6]]
         or _visual_items(section, normalized_bullets, []),
-        "visual_table": _normalize_visual_table(visual_table)
-        or _visual_table(section, normalized_bullets, []),
+        "visual_table": normalized_table,
+        "scene_direction": _normalize_scene_direction(
+            item.get("scene_direction"),
+            visual_kind=visual_kind,
+            slide_index=index,
+            text=" ".join(
+                [
+                    _clean_display_text(item.get("title")),
+                    _clean_display_text(item.get("purpose")),
+                    *normalized_bullets,
+                ]
+            ),
+        ),
     }
+
+
+SCENE_LAYOUTS = {"editorial", "comparison", "data_wall", "timeline", "evidence_grid", "diagram_focus"}
+SCENE_ENTRANCES = ("fade_up", "slide_left", "slide_right", "scale_in", "wipe")
+
+
+def _normalize_scene_direction(
+    value: Any,
+    *,
+    visual_kind: str,
+    slide_index: int,
+    text: str,
+) -> dict[str, str]:
+    raw = value if isinstance(value, dict) else {}
+    lowered = text.casefold()
+    layout = str(raw.get("layout") or "").strip().lower()
+    if layout not in SCENE_LAYOUTS:
+        if visual_kind == "metrics" and any(token in lowered for token in ("speed", "faster", "versus", " vs ", "compare")):
+            layout = "comparison"
+        else:
+            layout = {
+                "metrics": "data_wall",
+                "flow": "timeline",
+                "table": "evidence_grid",
+                "image": "diagram_focus" if slide_index % 2 else "editorial",
+            }.get(visual_kind, "editorial")
+    entrance = str(raw.get("entrance") or "").strip().lower()
+    if entrance not in SCENE_ENTRANCES:
+        entrance = SCENE_ENTRANCES[(slide_index - 1) % len(SCENE_ENTRANCES)]
+    emphasis = _clean_display_text(raw.get("emphasis") or "")
+    return {"layout": layout, "entrance": entrance, "emphasis": emphasis}
 
 
 def _clean_visual_item(text: str) -> str:
@@ -1379,8 +1426,13 @@ def _visual_table(section: str, bullets: list[str], keys: list[str]) -> list[lis
             ["Cursor", "Heuristic/VLM", "Improve grounding"],
             ["Talker", "Plan only", "Connect provider"],
         ]
-    topic = keys[0].title() if keys else section
-    return [["Aspect", "Focus", "Why it matters"], [section, topic, "Keeps the demo grounded"]]
+    if bullets:
+        rows = [["Claim", "Paper evidence", "Presentation role"]]
+        for index, bullet in enumerate(bullets[:3], start=1):
+            rows.append([f"Point {index}", _clean_display_text(bullet), "Supports the current explanation"])
+        return rows
+    topics = [key.title() for key in keys[:3] if str(key).strip()]
+    return [["Topic", "Focus", "Role"], *[[f"Point {i}", topic, "Research context"] for i, topic in enumerate(topics, start=1)]]
 
 
 def _normalize_visual_table(value: list[Any]) -> list[list[str]]:
@@ -1393,6 +1445,27 @@ def _normalize_visual_table(value: list[Any]) -> list[list[str]]:
         else:
             rows.append([_clean_display_text(row)])
     return rows
+
+
+def _visual_table_is_meaningful(rows: list[list[str]]) -> bool:
+    if len(rows) < 2:
+        return False
+    generic = {
+        "architecture",
+        "aspect",
+        "focus",
+        "topic",
+        "keeps the demo grounded",
+        "research context",
+    }
+    meaningful_rows = 0
+    for row in rows[1:]:
+        cells = [_clean_display_text(cell) for cell in row if _clean_display_text(cell)]
+        folded = [cell.casefold() for cell in cells]
+        informative = [cell for cell in folded if cell not in generic]
+        if len(informative) >= 2 and len(set(folded)) == len(folded):
+            meaningful_rows += 1
+    return meaningful_rows > 0
 
 
 INTERNAL_VIDEO_MARKERS = [
@@ -1470,7 +1543,13 @@ def sanitize_public_slides(slides: list[dict[str, Any]]) -> list[dict[str, Any]]
                 clean_row = [_clean_public_video_text(cell) for cell in cells[:4]]
                 if clean_row and not any(_contains_internal_video_marker(cell) for cell in clean_row):
                     rows.append(clean_row)
-            item["visual_table"] = rows
+            item["visual_table"] = rows if _visual_table_is_meaningful(rows) else []
+        item["scene_direction"] = _normalize_scene_direction(
+            item.get("scene_direction"),
+            visual_kind=str(item.get("visual_kind") or "image"),
+            slide_index=item["index"],
+            text=" ".join([item["title"], item["purpose"], *item["bullets"]]),
+        )
         sanitized.append(item)
     return sanitized
 
@@ -1599,6 +1678,19 @@ def _scene_focus_index(
         label = cleaned.split(":", 1)[0].strip().casefold()
         if label and len(label) >= 3 and label in narration_folded:
             return index
+    narration_tokens = set(re.findall(r"[a-z0-9]+(?:x|%)?", narration_folded))
+    stop_words = {"the", "and", "for", "with", "from", "time", "generation", "slide", "slides"}
+    best_index = -1
+    best_score = 0
+    for index, candidate in enumerate(candidates):
+        candidate_tokens = set(re.findall(r"[a-z0-9]+(?:x|%)?", _clean_display_text(candidate).casefold())) - stop_words
+        overlap = narration_tokens & candidate_tokens
+        score = sum(3 if re.search(r"\d", token) else 1 for token in overlap)
+        if score > best_score:
+            best_index = index
+            best_score = score
+    if best_index >= 0 and best_score >= 2:
+        return best_index
     return min(fallback, max(0, len(candidates) - 1))
 
 
@@ -1652,6 +1744,14 @@ def build_scene_timeline(
             beats = items[:4]
 
         visual_kind = str(slide.get("visual_kind") or "image").lower()
+        scene_direction = _normalize_scene_direction(
+            slide.get("scene_direction"),
+            visual_kind=visual_kind,
+            slide_index=slide_index,
+            text=" ".join(
+                [str(slide.get("title") or ""), str(slide.get("purpose") or ""), *[str(b) for b in slide.get("bullets") or []]]
+            ),
+        )
         bullets = [_clean_display_text(item) for item in slide.get("bullets", []) if str(item).strip()]
         visual_items = [_clean_visual_item(str(item)) for item in slide.get("visual_items", []) if str(item).strip()]
         generated_image_path = str(slide.get("generated_image_path") or "")
@@ -1686,6 +1786,8 @@ def build_scene_timeline(
             if animation_sec + minimum_hold_sec > duration:
                 animation_sec = max(0.8, duration - minimum_hold_sec)
             hold_sec = max(0.0, duration - animation_sec)
+            base_entrance_index = SCENE_ENTRANCES.index(scene_direction["entrance"])
+            entrance = SCENE_ENTRANCES[(base_entrance_index + beat_index) % len(SCENE_ENTRANCES)]
             timeline.append(
                 {
                     "shot_id": f"s{slide_index:02d}-{beat_index + 1:02d}",
@@ -1707,6 +1809,9 @@ def build_scene_timeline(
                     "visual_kind": visual_kind,
                     "has_generated_image": has_generated_image,
                     "composition_variant": (slide_index + beat_index) % 4,
+                    "layout_variant": scene_direction["layout"],
+                    "entrance": entrance,
+                    "director_emphasis": scene_direction["emphasis"],
                     "background_stage": {
                         "opener": "quiet",
                         "section_title": "quiet",
@@ -2215,6 +2320,90 @@ def diversify_slide_visuals(slides: list[dict[str, Any]]) -> list[dict[str, Any]
             item["visual_items"] = [str(b) for b in item.get("bullets", [])[:4]]
         diversified.append(item)
     return diversified
+
+
+def plan_scene_directions(
+    source: dict[str, Any],
+    slides: list[dict[str, Any]],
+    *,
+    use_api: bool,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Ask the text model for visual direction, then constrain it to renderable choices."""
+    model_directions: dict[int, dict[str, Any]] = {}
+    model_error = ""
+    enabled = os.environ.get("AUTO_VIDEO_USE_SCENE_DIRECTOR", "1").strip().lower() not in {"0", "false", "no"}
+    if use_api and enabled:
+        compact_slides = [
+            {
+                "index": int(slide.get("index") or i),
+                "title": slide.get("title"),
+                "purpose": slide.get("purpose"),
+                "bullets": slide.get("bullets"),
+                "visual_kind": slide.get("visual_kind"),
+                "visual_items": slide.get("visual_items"),
+            }
+            for i, slide in enumerate(slides, start=1)
+        ]
+        prompt = textwrap.dedent(
+            f"""
+            Act as a motion design director for a concise academic explainer video.
+            Recommend a distinct but restrained layout and entrance animation for every section.
+            Return JSON only:
+            {{"directions":[{{"slide_index":1,"layout":"editorial|comparison|data_wall|timeline|evidence_grid|diagram_focus","entrance":"fade_up|slide_left|slide_right|scale_in|wipe","emphasis":"concrete paper claim, number, module, or relationship"}}]}}
+            Use comparison for before/after, baselines, efficiency, or speedup. Use data_wall for several statistics, timeline for ordered stages, evidence_grid for experimental evidence, and diagram_focus for mechanisms.
+            Vary adjacent layouts and entrances. Avoid decorative empty space, giant isolated words, duplicate labels, fake metrics, and generic UI chrome.
+            Ground emphasis only in the supplied slide content.
+
+            Paper: {source.get('title', '')}
+            Slides: {json.dumps(compact_slides, ensure_ascii=False)[:14000]}
+            """
+        ).strip()
+        try:
+            data = _json_from_model(_call_openai_compatible(prompt))
+            directions = data.get("directions") if isinstance(data, dict) else None
+            if isinstance(directions, list):
+                for item in directions:
+                    if isinstance(item, dict):
+                        model_directions[int(item.get("slide_index") or 0)] = item
+        except Exception as exc:
+            model_error = str(exc)
+
+    planned: list[dict[str, Any]] = []
+    previous_layout = ""
+    previous_entrance = ""
+    layout_alternatives = {
+        "metrics": ("comparison", "data_wall"),
+        "flow": ("timeline", "diagram_focus"),
+        "table": ("evidence_grid", "editorial"),
+        "image": ("diagram_focus", "editorial"),
+    }
+    for position, slide in enumerate(slides, start=1):
+        item = dict(slide)
+        index = int(item.get("index") or position)
+        direction = _normalize_scene_direction(
+            model_directions.get(index) or item.get("scene_direction"),
+            visual_kind=str(item.get("visual_kind") or "image"),
+            slide_index=index,
+            text=" ".join(
+                [str(item.get("title") or ""), str(item.get("purpose") or ""), *[str(b) for b in item.get("bullets") or []]]
+            ),
+        )
+        alternatives = layout_alternatives.get(str(item.get("visual_kind") or "image"), ("editorial", "diagram_focus"))
+        if direction["layout"] == previous_layout:
+            direction["layout"] = next((choice for choice in alternatives if choice != previous_layout), direction["layout"])
+        if direction["entrance"] == previous_entrance:
+            current = SCENE_ENTRANCES.index(direction["entrance"])
+            direction["entrance"] = SCENE_ENTRANCES[(current + 1) % len(SCENE_ENTRANCES)]
+        item["scene_direction"] = direction
+        previous_layout = direction["layout"]
+        previous_entrance = direction["entrance"]
+        planned.append(item)
+    return planned, {
+        "mode": "model_directed" if model_directions else "deterministic_fallback",
+        "model_direction_count": len(model_directions),
+        "error": model_error,
+        "directions": [item["scene_direction"] for item in planned],
+    }
 
 
 def _downstream_modules(modules: list[str]) -> list[str]:
@@ -3460,7 +3649,6 @@ def _render_scene_mp4_video(
             img = Image.new("RGB", (width, height), background_color)
             draw = ImageDraw.Draw(img)
             _draw_scene_background(draw, width, height, sec, source=source, slide=slide, shot=shot)
-            background_frame = img.copy()
             _draw_scene_progress(
                 draw,
                 shot,
@@ -3470,8 +3658,11 @@ def _render_scene_mp4_video(
                 sec=sec,
                 font=fonts["small"],
             )
+            background_frame = img.copy()
+            content_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+            content_draw = ImageDraw.Draw(content_layer)
             _draw_scene_composition(
-                draw,
+                content_draw,
                 slide,
                 shot,
                 theme=theme,
@@ -3480,6 +3671,18 @@ def _render_scene_mp4_video(
                 local=local,
                 fonts=fonts,
             )
+            animation_fraction = min(
+                1.0,
+                max(0.001, float(shot.get("animation_sec") or 1.0) / max(0.001, duration)),
+            )
+            entrance_progress = _scene_ease(min(1.0, local / animation_fraction))
+            content_layer = _apply_scene_entrance(
+                content_layer,
+                str(shot.get("entrance") or "fade_up"),
+                entrance_progress,
+            )
+            img = Image.alpha_composite(img.convert("RGBA"), content_layer).convert("RGB")
+            draw = ImageDraw.Draw(img)
             _draw_scene_narration(
                 draw,
                 str(shot.get("narration") or ""),
@@ -3490,8 +3693,6 @@ def _render_scene_mp4_video(
                 font=fonts["caption"],
             )
 
-            enter_fraction = min(1.0, 0.45 / max(0.001, duration))
-            enter = _scene_ease(min(1.0, local / max(0.001, enter_fraction)))
             exit_fade_sec = max(0.0, float(os.environ.get("AUTO_VIDEO_EXIT_FADE_SEC", "0")))
             exit_fraction = min(1.0, exit_fade_sec / max(0.001, duration)) if exit_fade_sec else 0.0
             exit_alpha = (
@@ -3499,7 +3700,7 @@ def _render_scene_mp4_video(
                 if exit_fraction
                 else 1.0
             )
-            alpha = max(0.18, min(enter, exit_alpha))
+            alpha = max(0.18, exit_alpha)
             if alpha < 1.0:
                 img = Image.blend(background_frame, img, alpha)
             img.save(frames_dir / f"frame_{frame_index:05d}.png")
@@ -3536,6 +3737,34 @@ def _render_scene_mp4_video(
 def _scene_ease(value: float) -> float:
     value = max(0.0, min(1.0, value))
     return value * value * (3.0 - 2.0 * value)
+
+
+def _apply_scene_entrance(layer: Any, entrance: str, progress: float) -> Any:
+    from PIL import Image
+
+    progress = max(0.0, min(1.0, progress))
+    width, height = layer.size
+    canvas = Image.new("RGBA", layer.size, (0, 0, 0, 0))
+    if entrance == "slide_left":
+        canvas.alpha_composite(layer, (int((1.0 - progress) * 96), 0))
+    elif entrance == "slide_right":
+        canvas.alpha_composite(layer, (-int((1.0 - progress) * 96), 0))
+    elif entrance == "scale_in":
+        scale = 0.92 + 0.08 * progress
+        scaled = layer.resize(
+            (max(1, int(width * scale)), max(1, int(height * scale))),
+            resample=Image.Resampling.BICUBIC,
+        )
+        canvas.alpha_composite(scaled, ((width - scaled.width) // 2, (height - scaled.height) // 2))
+    elif entrance == "wipe":
+        reveal_width = max(1, int(width * progress))
+        canvas.alpha_composite(layer.crop((0, 0, reveal_width, height)), (0, 0))
+    else:
+        canvas.alpha_composite(layer, (0, int((1.0 - progress) * 32)))
+    opacity = 0.18 + 0.82 * progress
+    alpha = canvas.getchannel("A").point(lambda value: int(value * opacity))
+    canvas.putalpha(alpha)
+    return canvas
 
 
 def _scene_color(color: tuple[int, int, int], delta: int) -> tuple[int, int, int]:
@@ -4052,10 +4281,38 @@ def _draw_scene_metric(
 ) -> None:
     x1, y1, x2, y2 = box
     rows = [row for row in (slide.get("visual_table") or []) if isinstance(row, list)]
-    items = [_clean_visual_item(str(item)) for item in (slide.get("visual_items") or slide.get("bullets") or [])[:4]]
-    row_items = [_clean_visual_item(" | ".join(str(cell) for cell in row[:3])) for row in rows[1:5]]
-    cards = _metric_cards_from_items(row_items or items)
-    focus_index = min(int(shot.get("focus_index") or 0), max(0, len(cards) - 1))
+    items = [_clean_visual_item(str(item)) for item in (slide.get("visual_items") or [])[:4]]
+    bullets = [_clean_display_text(str(item)) for item in (slide.get("bullets") or [])[:4]]
+    row_items = (
+        [_clean_visual_item(" | ".join(str(cell) for cell in row[:3])) for row in rows[1:5]]
+        if _visual_table_is_meaningful(rows)
+        else []
+    )
+    narration = _clean_display_text(shot.get("narration") or "")
+    layout = str(shot.get("layout_variant") or "data_wall")
+    if layout == "comparison" and re.search(r"\b\d+(?:\.\d+)?\s*[x×%]", narration, flags=re.IGNORECASE):
+        _draw_scene_metric_comparison(
+            draw,
+            slide,
+            shot,
+            box,
+            reveal=reveal,
+            accent=accent,
+            fonts=fonts,
+        )
+        return
+    if layout == "comparison" and "parallel" in " ".join([narration, *items, *bullets]).casefold():
+        _draw_scene_parallel_mechanism(
+            draw,
+            shot,
+            box,
+            reveal=reveal,
+            accent=accent,
+            fonts=fonts,
+        )
+        return
+    cards = _metric_cards_from_items(items or [*bullets, *row_items])
+    focus_index = _metric_card_focus(cards, narration, fallback=int(shot.get("focus_index") or 0))
     value, label = cards[focus_index]
     variant = int(shot.get("composition_variant") or 0)
     focus_right = bool(variant % 2)
@@ -4074,12 +4331,135 @@ def _draw_scene_metric(
         spacing=5,
         max_lines=3,
     )
-    visible = min(len(cards), max(1, int(math.ceil(reveal * len(cards)))))
-    for i, (small_value, small_label) in enumerate(cards[:visible]):
+    supporting_cards = [card for index, card in enumerate(cards) if index != focus_index]
+    visible = min(len(supporting_cards), max(1, int(math.ceil(reveal * len(supporting_cards)))))
+    for i, (small_value, small_label) in enumerate(supporting_cards[:visible]):
         y = y1 + i * 66
         draw.text((list_x, y + 6), small_value, fill=accent, font=fonts["small"])
         _draw_single_line_text(draw, small_label, (list_x + 110, y + 6), font=fonts["small"], width=440, fill=(194, 208, 226))
         draw.line((list_x, y + 42, min(x2, list_x + 540), y + 42), fill=(38, 60, 82), width=1)
+
+
+def _draw_scene_parallel_mechanism(
+    draw: Any,
+    shot: dict[str, Any],
+    box: tuple[int, int, int, int],
+    *,
+    reveal: float,
+    accent: tuple[int, int, int],
+    fonts: dict[str, Any],
+) -> None:
+    x1, y1, x2, y2 = box
+    gap = 76
+    column_width = (x2 - x1 - gap) // 2
+    right_x = x1 + column_width + gap
+    draw.text((x1, y1), "SEQUENTIAL GENERATION", fill=(144, 164, 187), font=fonts["small"])
+    draw.text((right_x, y1), "PAPERTALKER PARALLEL", fill=accent, font=fonts["small"])
+    draw.rectangle((x1, y1 + 34, x1 + column_width, y1 + 37), fill=(47, 74, 99))
+    draw.rectangle((right_x, y1 + 34, x2, y1 + 37), fill=accent)
+    visible = max(1, min(3, int(math.ceil(reveal * 3))))
+    node_width = 132
+    node_height = 62
+    serial_y = y1 + 112
+    for index in range(visible):
+        node_x = x1 + index * (node_width + 34)
+        draw.rounded_rectangle(
+            (node_x, serial_y, node_x + node_width, serial_y + node_height),
+            radius=6,
+            fill=(11, 23, 36),
+            outline=(67, 91, 117),
+            width=2,
+        )
+        draw.text((node_x + 18, serial_y + 19), f"SLIDE {index + 1:02d}", fill=(203, 216, 232), font=fonts["small"])
+        if index and index < visible:
+            draw.line((node_x - 28, serial_y + 31, node_x - 7, serial_y + 31), fill=(91, 116, 145), width=3)
+            draw.polygon([(node_x - 8, serial_y + 25), (node_x, serial_y + 31), (node_x - 8, serial_y + 37)], fill=(91, 116, 145))
+    parallel_node_width = column_width - 104
+    for index in range(visible):
+        node_y = y1 + 76 + index * 72
+        draw.rounded_rectangle(
+            (right_x + 52, node_y, right_x + 52 + parallel_node_width, node_y + 52),
+            radius=6,
+            fill=(10, 31, 39),
+            outline=accent,
+            width=2,
+        )
+        draw.text((right_x + 72, node_y + 14), f"SLIDE {index + 1:02d}", fill=(233, 244, 249), font=fonts["small"])
+    draw.text((x1, y2 - 48), "Tasks wait for the previous slide", fill=(137, 157, 181), font=fonts["small"])
+    draw.text((right_x, y2 - 48), "Independent slides run at the same time", fill=accent, font=fonts["small"])
+
+
+def _draw_scene_metric_comparison(
+    draw: Any,
+    slide: dict[str, Any],
+    shot: dict[str, Any],
+    box: tuple[int, int, int, int],
+    *,
+    reveal: float,
+    accent: tuple[int, int, int],
+    fonts: dict[str, Any],
+) -> None:
+    x1, y1, x2, y2 = box
+    source_text = " ".join(
+        [
+            str(shot.get("narration") or ""),
+            str(slide.get("speaker_note") or ""),
+            *[str(item) for item in slide.get("bullets") or []],
+        ]
+    )
+    match = re.search(r"\b(\d+(?:\.\d+)?)\s*[x×]", source_text, flags=re.IGNORECASE)
+    factor = max(1.0, float(match.group(1))) if match else 1.0
+    value = f"{match.group(1)}x" if match else "VS"
+    draw.text((x1, y1 + 8), "REPORTED EFFICIENCY", fill=accent, font=fonts["small"])
+    draw.text((x1, y1 + 48), value, fill=accent, font=fonts["number"])
+    _draw_wrapped_text(
+        draw,
+        _clean_display_text(shot.get("narration") or shot.get("focus_text") or slide.get("visual_caption") or ""),
+        (x1, y1 + 148),
+        font=fonts["body"],
+        width=390,
+        max_height=118,
+        fill=(230, 238, 247),
+        spacing=5,
+        max_lines=4,
+    )
+    chart_x = x1 + 500
+    chart_width = x2 - chart_x
+    draw.text((chart_x, y1 + 8), "RELATIVE GENERATION TIME", fill=accent, font=fonts["small"])
+    comparisons = [
+        ("Sequential baseline", 1.0, "1.00x"),
+        ("PaperTalker parallel", 1.0 / factor if factor > 1 else 0.62, f"≤ {1.0 / factor:.2f}x" if factor > 1 else "faster"),
+    ]
+    for index, (label, ratio, readout) in enumerate(comparisons):
+        y = y1 + 82 + index * 112
+        draw.text((chart_x, y), label, fill=(203, 216, 232), font=fonts["small"])
+        draw.text((x2 - 86, y), readout, fill=accent if index else (150, 170, 194), font=fonts["small"])
+        draw.rounded_rectangle((chart_x, y + 38, x2, y + 58), radius=5, fill=(25, 43, 61))
+        bar_width = int(chart_width * ratio * reveal)
+        draw.rounded_rectangle(
+            (chart_x, y + 38, chart_x + max(8, bar_width), y + 58),
+            radius=5,
+            fill=accent if index else (91, 116, 145),
+        )
+    draw.text((chart_x, y2 - 44), "Lower is faster", fill=(133, 153, 177), font=fonts["small"])
+
+
+def _metric_card_focus(cards: list[tuple[str, str]], narration: str, *, fallback: int) -> int:
+    folded = narration.casefold()
+    best_index = -1
+    best_score = 0
+    stop_words = {"the", "and", "for", "with", "from", "time", "generation", "slide", "slides"}
+    narration_tokens = set(re.findall(r"[a-z0-9]+(?:x|%)?", folded)) - stop_words
+    for index, (value, label) in enumerate(cards):
+        card_tokens = set(re.findall(r"[a-z0-9]+(?:x|%)?", f"{value} {label}".casefold())) - stop_words
+        overlap = narration_tokens & card_tokens
+        score = sum(3 if re.search(r"\d", token) else 2 if len(token) >= 8 else 1 for token in overlap)
+        if score > best_score:
+            best_index = index
+            best_score = score
+    if best_index >= 0 and best_score:
+        return best_index
+    return min(fallback, max(0, len(cards) - 1))
 
 
 def _draw_scene_takeaways(
@@ -5043,26 +5423,28 @@ def _metric_cards_from_items(items: list[str]) -> list[tuple[str, str]]:
     cards: list[tuple[str, str]] = []
     seen: set[str] = set()
     pattern = re.compile(
-        r"\b\d+(?:\.\d+)?(?:\s*(?:-|to)\s*\d+(?:\.\d+)?)?\s*%?\s*(?:pages?|figures?|slides?|minutes?|videos?|pairs?|accuracy)?",
+        r"\b\d+(?:\.\d+)?(?:\s*(?:-|to)\s*\d+(?:\.\d+)?)?\s*(?:%|x|×)?\s*(?:pages?|figures?|slides?|minutes?|videos?|pairs?|accuracy)?",
         flags=re.IGNORECASE,
     )
     for item in items:
         text = re.sub(r"\s+", " ", item).strip()
-        for match in pattern.finditer(text):
+        matches = list(pattern.finditer(text))
+        added_metric = False
+        for match in matches:
             value = re.sub(r"\s+", " ", match.group(0)).strip()
-            if not value or value in seen:
+            key = value.casefold()
+            if not value or key in seen:
                 continue
             label = _metric_label_from_value(value, text)
             cards.append((value, label or "Reported paper statistic"))
-            seen.add(value)
+            seen.add(key)
+            added_metric = True
             if len(cards) >= 4:
                 return cards
-    for item in items:
-        label = item.strip()
-        if label:
-            cards.append((f"{len(cards) + 1:02d}", label))
-        if len(cards) >= 4:
-            break
+        if not added_metric and text:
+            cards.append((f"{len(cards) + 1:02d}", text))
+            if len(cards) >= 4:
+                return cards
     return cards or [("01", "Evidence extracted from the paper")]
 
 
@@ -5217,6 +5599,12 @@ def run_video_pipeline(
         max_revisions=max_revisions,
         min_revisions=min_revisions,
         use_vlm_cursor=use_vlm_cursor,
+    )
+    _progress("scene_director", "plan varied layouts and entrances", detail=f"api={'on' if use_api else 'off'}")
+    slides, scene_direction_report = plan_scene_directions(source, slides, use_api=use_api)
+    (out_dir / "scene_direction.json").write_text(
+        json.dumps(scene_direction_report, indent=2, ensure_ascii=False),
+        encoding="utf-8",
     )
     slides = sanitize_public_slides(slides)
     subtitles = sanitize_public_subtitles(subtitles)
