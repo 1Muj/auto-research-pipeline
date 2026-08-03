@@ -20,8 +20,6 @@ from auto_research.video_pipeline import (
     mux_audio_into_video,
     render_mp4_video,
     align_cursor_plan_to_subtitles,
-    scale_timeline_to_duration,
-    synthesize_tts_audio,
     synthesize_tts_segments,
     write_preview_html,
     write_srt,
@@ -247,13 +245,26 @@ def repair_video_artifacts(
         synced_duration = max((float(item["end_sec"]) for item in subtitles), default=0.0)
         timeline_scale = synced_duration / original_duration if original_duration > 0 else 1.0
     elif use_tts:
-        tts_result = synthesize_tts_audio(talker, artifact_dir, use_tts=True)
-        if tts_result.get("ok"):
-            talker["audio_path"] = tts_result.get("path", "")
-            talker["audio_generated"] = True
-            audio_duration = media_duration_seconds(Path(str(tts_result["path"])))
-            if audio_duration:
-                subtitles, cursor_plan, timeline_scale = scale_timeline_to_duration(subtitles, cursor_plan, audio_duration)
+        video_path = artifact_dir / "video.mp4"
+        repair_report = {
+            "mode": "eval_repair_skipped_tts_failure",
+            "video_rendered": video_path.is_file(),
+            "video_path": str(video_path) if video_path.is_file() else "",
+            "tts_requested": True,
+            "tts_audio_generated": False,
+            "tts_timing_mode": "segment_exact_required",
+            "tts_error": str(tts_result.get("error") or "timed segment synthesis failed"),
+            "audio_muxed": has_audio_stream(video_path),
+            "audio_stream_present": has_audio_stream(video_path),
+            "repair_applied": False,
+            "repair_skip_reason": "A timed TTS segment failed after retries; the prior synchronized video was preserved.",
+            "slide_count": len(_read_json(artifact_dir / "storyboard.json", {}).get("slides", [])),
+            "subtitle_count": len(_read_json(artifact_dir / "storyboard.json", {}).get("subtitles", [])),
+            "model_repair": model_repair_info,
+            "evaluation_summary": _summarize_eval(evaluation),
+        }
+        _write_json(artifact_dir / "eval_repair_report.json", repair_report)
+        return repair_report
 
     repaired_storyboard = {
         "slides": cleaned_slides,
@@ -286,7 +297,7 @@ def repair_video_artifacts(
         "video_path": str(video_path) if rendered else "",
         "tts_requested": use_tts,
         "tts_audio_generated": bool(tts_result.get("ok")),
-        "tts_timing_mode": tts_result.get("timing_mode", "whole_track_scaled"),
+        "tts_timing_mode": tts_result.get("timing_mode", "segment_exact_required"),
         "tts_speech_tempo": tts_result.get("speech_tempo"),
         "tts_post_speech_hold_sec": tts_result.get("post_speech_hold_sec"),
         "audio_duration_sec": round(audio_duration, 3) if audio_duration else None,

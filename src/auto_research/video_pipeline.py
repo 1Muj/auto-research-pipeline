@@ -1056,6 +1056,27 @@ def synthesize_tts_segments(
     _progress("tts_builder", "generate timed narration segments", current=0, total=len(jobs), detail=f"workers={workers} tempo={tempo:.2f}")
     with ThreadPoolExecutor(max_workers=workers) as pool:
         generated = list(pool.map(generate, jobs))
+    retry_attempts = max(1, min(5, int(os.environ.get("AUTO_VIDEO_TTS_SEGMENT_RETRIES", "3"))))
+    recovered: list[tuple[int, bool, str, Path]] = []
+    for index, ok, error, raw_path in generated:
+        if not ok:
+            text = jobs[index][1]
+            for attempt in range(1, retry_attempts + 1):
+                raw_path.unlink(missing_ok=True)
+                _progress(
+                    "tts_builder",
+                    "retry failed narration segment",
+                    current=index + 1,
+                    total=len(jobs),
+                    detail=f"attempt={attempt}/{retry_attempts}",
+                )
+                ok, error = _synthesize_tts_clip(text, raw_path)
+                if ok:
+                    break
+                if attempt < retry_attempts:
+                    time.sleep(min(3.0, 0.75 * attempt))
+        recovered.append((index, ok, error, raw_path))
+    generated = recovered
     generated.sort(key=lambda item: item[0])
 
     concat_paths: list[Path] = []
@@ -1136,11 +1157,23 @@ def mux_audio_into_video(video_path: Path, audio_path: Path) -> bool:
     if not video_path.is_file() or not audio_path.is_file() or shutil.which("ffmpeg") is None:
         _progress("mux_audio", "skipped", detail="missing video/audio file or ffmpeg")
         return False
+    video_duration = media_duration_seconds(video_path)
+    audio_duration = media_duration_seconds(audio_path)
+    duration_delta = abs(video_duration - audio_duration) if video_duration and audio_duration else None
+    if duration_delta is None or duration_delta > 0.75:
+        _progress(
+            "mux_audio",
+            "refused unsynchronized mux",
+            detail=(
+                f"video={video_duration or 0:.3f}s audio={audio_duration or 0:.3f}s "
+                f"delta={duration_delta if duration_delta is not None else -1:.3f}s"
+            ),
+        )
+        return False
     silent_backup = video_path.with_name("video_silent.mp4")
     output = video_path.with_name("video_with_audio.mp4")
     try:
-        if not silent_backup.exists():
-            shutil.copy2(video_path, silent_backup)
+        shutil.copy2(video_path, silent_backup)
         cmd = [
             "ffmpeg",
             "-y",
@@ -1902,6 +1935,27 @@ def _scene_narration_is_anaphoric(narration: str) -> bool:
     return bool(re.match(r"^(?:this|that|it|these|those|such an? approach)\b", cleaned))
 
 
+def _merge_scene_beats(items: list[dict[str, Any]], *, max_beats: int = 4) -> list[dict[str, Any]]:
+    if len(items) <= max_beats:
+        return [dict(item) for item in items]
+    merged: list[dict[str, Any]] = []
+    for group_index in range(max_beats):
+        start_index = round(group_index * len(items) / max_beats)
+        end_index = round((group_index + 1) * len(items) / max_beats)
+        group = items[start_index:end_index]
+        if not group:
+            continue
+        beat = dict(group[0])
+        beat["start_sec"] = float(group[0].get("start_sec") or 0)
+        beat["end_sec"] = float(group[-1].get("end_sec") or beat["start_sec"])
+        beat["speech_start_sec"] = float(group[0].get("speech_start_sec") or beat["start_sec"])
+        beat["speech_end_sec"] = float(group[-1].get("speech_end_sec") or beat["end_sec"])
+        beat["text"] = " ".join(_clean_display_text(item.get("text")) for item in group if item.get("text"))
+        beat["merged_subtitle_count"] = len(group)
+        merged.append(beat)
+    return merged
+
+
 def build_scene_timeline(
     source: dict[str, Any],
     slides: list[dict[str, Any]],
@@ -1949,7 +2003,7 @@ def build_scene_timeline(
             else:
                 beats = [{**item, "start_sec": start, "end_sec": end}]
         else:
-            beats = items[:4]
+            beats = _merge_scene_beats(items, max_beats=4)
 
         visual_kind = str(slide.get("visual_kind") or "image").lower()
         scene_direction = _normalize_scene_direction(
@@ -6036,14 +6090,11 @@ def run_video_pipeline(
         timeline_scale = synced_duration / original_duration if original_duration > 0 else 1.0
         _progress("timeline", "aligned scenes to measured TTS segments", detail=f"audio_duration={audio_duration or 0:.3f}s timeline={synced_duration:.3f}s")
     elif use_tts:
-        _progress("tts_builder", "segment timing failed; falling back to whole-track TTS", detail=str(tts_result.get("error") or ""))
-        tts_result = synthesize_tts_audio(talker, out_dir, use_tts=True)
-        if tts_result.get("ok"):
-            talker["audio_path"] = tts_result.get("path", "")
-            talker["audio_generated"] = True
-            audio_duration = media_duration_seconds(Path(str(tts_result["path"])))
-            if audio_duration:
-                subtitles, cursor_plan, timeline_scale = scale_timeline_to_duration(subtitles, cursor_plan, audio_duration)
+        _progress(
+            "tts_builder",
+            "timed narration failed; refusing unsynchronized whole-track fallback",
+            detail=str(tts_result.get("error") or ""),
+        )
     (out_dir / "tts_generation.json").write_text(
         json.dumps(tts_result, indent=2, ensure_ascii=False),
         encoding="utf-8",
@@ -6173,7 +6224,7 @@ def run_video_pipeline(
         "tts_requested": use_tts,
         "tts_audio_generated": bool(tts_result.get("ok")),
         "tts_audio_path": tts_result.get("path", ""),
-        "tts_timing_mode": tts_result.get("timing_mode", "whole_track_scaled"),
+        "tts_timing_mode": tts_result.get("timing_mode", "segment_exact_required"),
         "tts_speech_tempo": tts_result.get("speech_tempo"),
         "tts_post_speech_hold_sec": tts_result.get("post_speech_hold_sec"),
         "audio_muxed": audio_muxed,

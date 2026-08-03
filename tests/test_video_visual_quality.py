@@ -14,6 +14,7 @@ from auto_research.video_pipeline import (
     _image_generation_prompt,
     _metric_cards_from_items,
     _metric_card_focus,
+    _merge_scene_beats,
     _normalize_slide,
     _scene_focus_index,
     _scene_item_detail,
@@ -122,6 +123,21 @@ def test_multi_beat_metric_scene_keeps_each_explanation_visual() -> None:
 
     assert [shot["shot_type"] for shot in timeline] == ["metric", "metric", "metric", "metric"]
     assert [shot["focus_index"] for shot in timeline] == [0, 0, 1, 1]
+
+
+def test_scene_beats_merge_without_dropping_subtitle_time_or_text() -> None:
+    subtitles = [
+        {"start_sec": index * 2, "end_sec": (index + 1) * 2, "text": f"Sentence {index + 1}."}
+        for index in range(6)
+    ]
+
+    beats = _merge_scene_beats(subtitles, max_beats=4)
+
+    assert len(beats) == 4
+    assert beats[0]["start_sec"] == 0
+    assert beats[-1]["end_sec"] == 12
+    merged_text = " ".join(beat["text"] for beat in beats)
+    assert all(f"Sentence {index}." in merged_text for index in range(1, 7))
 
 
 def test_duplicate_placeholder_table_is_replaced_with_grounded_rows() -> None:

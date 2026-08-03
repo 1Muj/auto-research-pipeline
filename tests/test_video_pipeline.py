@@ -10,6 +10,7 @@ from auto_research.video_pipeline import (
     _text_model_provider,
     build_slides,
     media_duration_seconds,
+    mux_audio_into_video,
     synthesize_tts_segments,
 )
 
@@ -70,6 +71,55 @@ def test_segment_tts_uses_measured_audio_and_post_speech_hold(tmp_path: Path, mo
     total_audio = media_duration_seconds(Path(result["path"]))
     assert total_audio is not None
     assert abs(total_audio - synced[-1]["end_sec"]) < 0.15
+
+
+def test_segment_tts_retries_a_transient_failed_sentence(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LUM_API_KEY", "test-key")
+    monkeypatch.setenv("AUTO_VIDEO_TTS_TEMPO", "1.0")
+    monkeypatch.setenv("AUTO_VIDEO_TTS_WORKERS", "1")
+    monkeypatch.setenv("AUTO_VIDEO_TTS_SEGMENT_RETRIES", "3")
+    attempts = 0
+
+    def flaky_tts_clip(_text: str, out: Path) -> tuple[bool, str]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return False, "temporary provider failure"
+        proc = subprocess.run(
+            [
+                "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
+                "-t", "0.5", "-c:a", "libmp3lame", str(out),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return proc.returncode == 0 and out.is_file(), ""
+
+    monkeypatch.setattr(video_pipeline, "_synthesize_tts_clip", flaky_tts_clip)
+    subtitles = [{"slide_index": 1, "start_sec": 0, "end_sec": 5, "text": "Retry this sentence."}]
+
+    result, synced = synthesize_tts_segments(subtitles, tmp_path, use_tts=True)
+
+    assert attempts == 2
+    assert result["ok"] is True
+    assert result["timing_mode"] == "segment_exact"
+    assert synced[0]["speech_start_sec"] > synced[0]["start_sec"]
+
+
+def test_audio_mux_refuses_mismatched_track_duration(tmp_path: Path, monkeypatch) -> None:
+    video = tmp_path / "video.mp4"
+    audio = tmp_path / "narration.mp3"
+    video.write_bytes(b"video")
+    audio.write_bytes(b"audio")
+    monkeypatch.setattr(
+        video_pipeline,
+        "media_duration_seconds",
+        lambda path: 10.0 if path == video else 14.0,
+    )
+
+    assert mux_audio_into_video(video, audio) is False
+    assert not (tmp_path / "video_silent.mp4").exists()
 
 
 def test_video_slide_builder_adds_rich_visual_types() -> None:
