@@ -20,6 +20,7 @@ from auto_research.video_pipeline import (
     mux_audio_into_video,
     render_mp4_video,
     align_cursor_plan_to_subtitles,
+    add_title_card_hold,
     synthesize_tts_segments,
     write_preview_html,
     write_srt,
@@ -232,6 +233,7 @@ def repair_video_artifacts(
     subtitles = build_subtitles(cleaned_slides, seconds_per_slide=seconds_per_slide)
     cursor_plan = build_cursor_plan(subtitles, slides=cleaned_slides, source=source, out_dir=artifact_dir)
     talker = build_talker_plan(subtitles)
+    subtitles = add_title_card_hold(subtitles)
     tts_result, timed_subtitles = synthesize_tts_segments(subtitles, artifact_dir, use_tts=use_tts)
     audio_duration = None
     timeline_scale = 1.0

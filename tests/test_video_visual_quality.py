@@ -140,6 +140,27 @@ def test_scene_beats_merge_without_dropping_subtitle_time_or_text() -> None:
     assert all(f"Sentence {index}." in merged_text for index in range(1, 7))
 
 
+def test_core_flow_starts_with_the_method_diagram_instead_of_an_empty_section_card() -> None:
+    slides = [
+        {"index": 1, "title": "Motivation", "bullets": ["Problem."], "visual_kind": "image"},
+        {
+            "index": 2,
+            "title": "Core Method",
+            "bullets": ["PaperTalker coordinates specialized agents."],
+            "visual_kind": "flow",
+            "visual_items": ["Paper", "Slides", "Alignment", "Speech", "Video"],
+        },
+    ]
+    subtitles = [
+        {"slide_index": 2, "start_sec": index * 5, "end_sec": (index + 1) * 5, "text": f"Method beat {index + 1}."}
+        for index in range(4)
+    ]
+
+    shots = [shot for shot in build_scene_timeline({"title": "Demo"}, slides, subtitles) if shot["slide_index"] == 2]
+
+    assert [shot["shot_type"] for shot in shots] == ["process", "process_focus", "process_focus", "synthesis"]
+
+
 def test_duplicate_placeholder_table_is_replaced_with_grounded_rows() -> None:
     slide = _normalize_slide(
         1,

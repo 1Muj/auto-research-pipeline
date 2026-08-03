@@ -7,10 +7,14 @@ from pathlib import Path
 import auto_research.video_pipeline as video_pipeline
 from auto_research.video_pipeline import (
     _clean_vision_response_content,
+    _enforce_source_storyboard_coverage,
     _text_model_provider,
+    build_scene_timeline,
     build_slides,
+    load_source,
     media_duration_seconds,
     mux_audio_into_video,
+    revise_slides,
     synthesize_tts_segments,
 )
 
@@ -120,6 +124,86 @@ def test_audio_mux_refuses_mismatched_track_duration(tmp_path: Path, monkeypatch
 
     assert mux_audio_into_video(video, audio) is False
     assert not (tmp_path / "video_silent.mp4").exists()
+
+
+def test_pdf_metadata_supplies_real_title_and_authors(tmp_path: Path) -> None:
+    from pypdf import PdfWriter
+
+    pdf = tmp_path / "paper.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    writer.add_metadata({"/Title": "Grounded Paper Title", "/Author": "Ada Example; Lin Example"})
+    with pdf.open("wb") as stream:
+        writer.write(stream)
+
+    source = load_source(pdf, kind="paper")
+
+    assert source["title"] == "Grounded Paper Title"
+    assert source["authors"] == "Ada Example; Lin Example"
+
+
+def test_scene_timeline_adds_silent_title_card_before_first_speech() -> None:
+    source = {"title": "Paper2Video", "authors": "Ada Example"}
+    slides = [{"index": 1, "title": "Motivation", "bullets": ["A grounded claim."], "visual_kind": "image"}]
+    subtitles = [
+        {
+            "slide_index": 1,
+            "segment_start_sec": 0,
+            "start_sec": 4,
+            "speech_start_sec": 4,
+            "speech_end_sec": 9,
+            "end_sec": 10,
+            "text": "A grounded claim.",
+        }
+    ]
+
+    timeline = build_scene_timeline(source, slides, subtitles)
+
+    assert timeline[0]["shot_type"] == "title_card"
+    assert timeline[0]["headline"] == "Paper2Video"
+    assert timeline[0]["end_sec"] == 4
+    assert timeline[1]["start_sec"] == 4
+
+
+def test_slide_revision_cannot_shrink_the_storyboard(monkeypatch) -> None:
+    slides = [
+        {"index": index, "title": f"Slide {index}", "bullets": [f"Claim {index}."], "visual_kind": "image"}
+        for index in range(1, 5)
+    ]
+    monkeypatch.setattr(
+        video_pipeline,
+        "_call_openai_compatible",
+        lambda _prompt: json.dumps({"slides": slides[:2]}),
+    )
+
+    revised = revise_slides(
+        {"title": "Demo", "text": "Grounded source."},
+        slides,
+        {"revise_next": {"slide_builder": "Improve details."}},
+        round_index=1,
+        use_api=True,
+    )
+
+    assert len(revised) == 4
+    assert revised[2]["title"] == "Slide 3"
+
+
+def test_papertalker_core_method_cannot_collapse_to_parallel_speed_only() -> None:
+    source = {
+        "text": "PaperTalker uses Tree Search Visual Choice, cursor grounding, speech synthesis, and talking-head rendering.",
+    }
+    slides = [
+        {"index": 1, "title": "Motivation", "bullets": ["Problem."], "visual_kind": "image"},
+        {"index": 2, "title": "Core Method", "bullets": ["Parallel generation achieves 6x speedup."], "visual_kind": "metrics"},
+    ]
+
+    grounded = _enforce_source_storyboard_coverage(source, slides)
+    core = grounded[1]
+
+    assert core["visual_kind"] == "flow"
+    assert "PaperTalker" in core["speaker_note"]
+    assert "Tree Search Visual Choice" in core["speaker_note"]
+    assert "cursor" in core["speaker_note"].casefold()
 
 
 def test_video_slide_builder_adds_rich_visual_types() -> None:

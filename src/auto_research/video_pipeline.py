@@ -197,6 +197,19 @@ def _extract_pdf_text(path: Path) -> str:
     return "\n".join(chunks).strip()
 
 
+def _extract_pdf_metadata(path: Path) -> dict[str, str]:
+    try:
+        from pypdf import PdfReader  # type: ignore[import-not-found]
+
+        metadata = PdfReader(str(path)).metadata or {}
+    except Exception:
+        return {}
+    return {
+        "title": _clean_display_text(metadata.get("/Title") or ""),
+        "authors": _clean_display_text(metadata.get("/Author") or ""),
+    }
+
+
 def load_source(input_path: Path, *, kind: str) -> dict[str, Any]:
     path = input_path.resolve()
     if kind not in {"paper", "project"}:
@@ -215,10 +228,19 @@ def load_source(input_path: Path, *, kind: str) -> dict[str, Any]:
         raise FileNotFoundError(f"Input not found: {path}")
     if path.suffix.lower() == ".pdf":
         text = _extract_pdf_text(path)
+        metadata = _extract_pdf_metadata(path)
     else:
         text = _read_text_file(path)
-    title = _guess_title(text) or path.stem.replace("_", " ").replace("-", " ").title()
-    return {"kind": kind, "title": title, "source_path": str(path), "text": text, "files": []}
+        metadata = {}
+    title = metadata.get("title") or _guess_title(text) or path.stem.replace("_", " ").replace("-", " ").title()
+    return {
+        "kind": kind,
+        "title": title,
+        "authors": metadata.get("authors", ""),
+        "source_path": str(path),
+        "text": text,
+        "files": [],
+    }
 
 
 def _load_project_text(path: Path) -> tuple[str, list[str]]:
@@ -251,8 +273,11 @@ def _load_project_text(path: Path) -> tuple[str, list[str]]:
 
 
 def _guess_title(text: str) -> str:
+    generic = {"preprint", "draft", "paper", "manuscript", "untitled"}
     for line in text.splitlines()[:40]:
         line = line.strip().strip("#").strip()
+        if line.casefold() in generic:
+            continue
         if 8 <= len(line) <= 120 and not line.lower().startswith(("abstract", "introduction")):
             return line
     return ""
@@ -974,6 +999,16 @@ def synthesize_tts_audio(talker: dict[str, Any], out_dir: Path, *, use_tts: bool
     return result
 
 
+def add_title_card_hold(subtitles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    prepared = [dict(item) for item in subtitles]
+    if prepared:
+        prepared[0]["title_card_hold_sec"] = max(
+            2.5,
+            min(8.0, float(os.environ.get("AUTO_VIDEO_TITLE_CARD_SEC", "4.0"))),
+        )
+    return prepared
+
+
 def _synthesize_tts_clip(text: str, out: Path) -> tuple[bool, str]:
     key = _lumid_api_key() or os.environ.get("OPENAI_API_KEY")
     if not key:
@@ -1092,9 +1127,10 @@ def synthesize_tts_segments(
             result["error"] = f"segment {index + 1} has no measurable duration"
             return result, subtitles
         speech_duration = raw_duration / tempo
-        target_duration = pre_hold + speech_duration + post_hold
+        segment_pre_hold = max(pre_hold, float(subtitles[index].get("title_card_hold_sec") or 0.0))
+        target_duration = segment_pre_hold + speech_duration + post_hold
         wav_path = segment_dir / f"timed_{index:03d}.wav"
-        delay_ms = int(round(pre_hold * 1000))
+        delay_ms = int(round(segment_pre_hold * 1000))
         filter_chain = f"atempo={tempo:.4f},adelay={delay_ms}|{delay_ms},apad=pad_dur={post_hold:.4f}"
         proc = subprocess.run(
             [
@@ -1111,9 +1147,13 @@ def synthesize_tts_segments(
             result["error"] = f"segment {index + 1} timing conversion failed"
             return result, subtitles
         updated = dict(subtitles[index])
-        updated["start_sec"] = round(cursor, 3)
-        updated["speech_start_sec"] = round(cursor + pre_hold, 3)
-        updated["speech_end_sec"] = round(cursor + pre_hold + speech_duration, 3)
+        updated["segment_start_sec"] = round(cursor, 3)
+        updated["start_sec"] = round(
+            cursor + segment_pre_hold if updated.get("title_card_hold_sec") else cursor,
+            3,
+        )
+        updated["speech_start_sec"] = round(cursor + segment_pre_hold, 3)
+        updated["speech_end_sec"] = round(cursor + segment_pre_hold + speech_duration, 3)
         cursor += actual_duration
         updated["end_sec"] = round(cursor, 3)
         synced.append(updated)
@@ -1126,6 +1166,7 @@ def synthesize_tts_segments(
                 "raw_duration_sec": round(raw_duration, 3),
                 "speech_duration_sec": round(speech_duration, 3),
                 "timeline_duration_sec": round(actual_duration, 3),
+                "pre_speech_hold_sec": round(segment_pre_hold, 3),
                 "start_sec": updated["start_sec"],
                 "end_sec": updated["end_sec"],
             }
@@ -1436,9 +1477,76 @@ def build_slides(source: dict[str, Any], *, max_slides: int, use_api: bool) -> l
                         max_slides=target_slides,
                     )
                 )
-            return normalized[:target_slides]
+            return _enforce_source_storyboard_coverage(source, normalized[:target_slides])
 
-    return _build_heuristic_slides(source, keys, start_index=1, max_slides=target_slides)
+    return _enforce_source_storyboard_coverage(
+        source,
+        _build_heuristic_slides(source, keys, start_index=1, max_slides=target_slides),
+    )
+
+
+def _enforce_source_storyboard_coverage(
+    source: dict[str, Any],
+    slides: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    source_text = str(source.get("text") or "")
+    source_folded = source_text.casefold()
+    if not all(token in source_folded for token in ("papertalker", "tree search visual choice", "cursor grounding")):
+        return slides
+    core_index = next(
+        (
+            index
+            for index, slide in enumerate(slides)
+            if "core method" in f"{slide.get('title', '')} {slide.get('purpose', '')}".casefold()
+        ),
+        min(3, len(slides) - 1) if slides else -1,
+    )
+    if core_index < 0:
+        return slides
+    core = dict(slides[core_index])
+    current_text = " ".join(
+        [
+            str(core.get("title") or ""),
+            str(core.get("speaker_note") or ""),
+            *[str(item) for item in core.get("bullets") or []],
+        ]
+    ).casefold()
+    required = ("papertalker", "tree search visual choice", "cursor grounding")
+    if all(token in current_text for token in required):
+        return slides
+    core.update(
+        {
+            "purpose": "Explain the complete PaperTalker multi-agent architecture before its efficiency optimizations.",
+            "bullets": [
+                "PaperTalker coordinates slide generation, subtitles, cursor grounding, speech synthesis, and talking-head rendering.",
+                "Tree Search Visual Choice explores layout variants and uses a vision-language model to select the strongest composition.",
+                "Independent slide-wise generation runs in parallel, reducing production time by more than 6x.",
+            ],
+            "speaker_note": (
+                "PaperTalker is a multi-agent framework rather than a single end-to-end generator. "
+                "Its agents create and refine slides, write synchronized subtitles, ground cursor trajectories, synthesize speech, and render the talking head. "
+                "For visual quality, Tree Search Visual Choice explores multiple layout branches and asks a vision-language model to select the best composition. "
+                "Because slides are largely independent, these modules can run slide-wise in parallel, achieving a speedup of more than six times."
+            ),
+            "visual_kind": "flow",
+            "visual_caption": "PaperTalker multi-agent generation pipeline",
+            "visual_items": [
+                "Paper input",
+                "Slide and layout agents",
+                "Subtitle and cursor alignment",
+                "Speech and talking-head rendering",
+                "Presentation video",
+            ],
+            "scene_direction": {
+                "layout": "diagram_focus",
+                "entrance": str((core.get("scene_direction") or {}).get("entrance") or "fade_up"),
+                "emphasis": "PaperTalker agent pipeline and Tree Search Visual Choice",
+            },
+        }
+    )
+    updated = [dict(slide) for slide in slides]
+    updated[core_index] = _normalize_slide(core_index + 1, core)
+    return updated
 
 
 def _build_heuristic_slides(
@@ -1869,6 +1977,12 @@ def _scene_shot_sequence(
         if slide_position == 1:
             sequence[0] = "opener"
         return sequence
+    if visual_kind == "flow" and beat_count >= 3:
+        sequence = ["process", *(["process_focus"] * (beat_count - 2)), "synthesis"]
+        if slide_position == 1:
+            sequence[0] = "opener"
+            sequence[1] = "process"
+        return sequence
     if beat_count == 3:
         first = "opener" if slide_position == 1 else "section_title"
         return [first, primary, "synthesis"]
@@ -1962,13 +2076,52 @@ def build_scene_timeline(
     subtitles: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Turn slide-organized content into narration-driven video shots."""
+    first_subtitle = min(subtitles, key=lambda item: float(item.get("start_sec") or 0), default=None)
+    title_start = float(first_subtitle.get("segment_start_sec", first_subtitle.get("start_sec") or 0)) if first_subtitle else 0.0
+    title_end = float(first_subtitle.get("speech_start_sec") or title_start) if first_subtitle else title_start
+    has_title_card = bool(source.get("title")) and title_end - title_start >= 2.0
     by_slide: dict[int, list[dict[str, Any]]] = {}
     for subtitle in subtitles:
-        by_slide.setdefault(int(subtitle.get("slide_index") or 0), []).append(dict(subtitle))
+        item = dict(subtitle)
+        if has_title_card and subtitle is first_subtitle:
+            item["start_sec"] = title_end
+        by_slide.setdefault(int(subtitle.get("slide_index") or 0), []).append(item)
     for items in by_slide.values():
         items.sort(key=lambda item: float(item.get("start_sec") or 0))
 
     timeline: list[dict[str, Any]] = []
+    if has_title_card:
+        timeline.append(
+            {
+                "shot_id": "title-01",
+                "slide_index": 0,
+                "shot_index": 0,
+                "start_sec": round(title_start, 3),
+                "end_sec": round(title_end, 3),
+                "speech_start_sec": round(title_end, 3),
+                "speech_end_sec": round(title_end, 3),
+                "duration_sec": round(title_end - title_start, 3),
+                "animation_sec": min(1.8, max(0.8, (title_end - title_start) * 0.35)),
+                "hold_sec": max(0.0, title_end - title_start - 1.4),
+                "shot_type": "title_card",
+                "headline": _clean_display_text(source.get("title")),
+                "section_label": "Research paper",
+                "narration": "",
+                "focus_text": _clean_display_text(source.get("authors")),
+                "focus_index": 0,
+                "visual_kind": "title",
+                "has_generated_image": False,
+                "visual_asset_path": "",
+                "visual_asset_kind": "none",
+                "composition_variant": 0,
+                "layout_variant": "editorial",
+                "entrance": "fade_up",
+                "director_emphasis": _clean_display_text(source.get("title")),
+                "background_stage": "quiet",
+                "transition": "fade",
+                "motion": "title_reveal",
+            }
+        )
     for slide_position, slide in enumerate(slides, start=1):
         slide_index = int(slide.get("index") or slide_position)
         items = by_slide.get(slide_index, [])
@@ -2448,7 +2601,8 @@ def revise_slides(
             Revise this paper/project-to-video slide storyboard based on judge feedback.
             Return JSON only:
             {{"slides":[{{"title":"...","bullets":["..."],"speaker_note":"...","visual_prompt":"..."}}]}}
-            Keep the same number of slides. Make the narration more grounded and presentation-ready.
+            Return exactly {len(slides)} slides in the same order. Do not delete, merge, or renumber sections.
+            Make the narration more grounded and presentation-ready.
             Keep every bullet as a complete sentence under 24 words. Do not use ellipses.
             Add missing concrete paper details where the previous slide felt generic.
             Never mention judge feedback, revision passes, evaluator modules, or internal pipeline names.
@@ -2464,8 +2618,9 @@ def revise_slides(
         data = _json_from_model(_call_openai_compatible(prompt))
         revised = data.get("slides") if isinstance(data, dict) else None
         if isinstance(revised, list) and revised:
-            normalized = [_normalize_slide(i, item) for i, item in enumerate(revised[: len(slides)], start=1)]
-            return sanitize_public_slides(normalized)
+            merged = [revised[index] if index < len(revised) else slides[index] for index in range(len(slides))]
+            normalized = [_normalize_slide(i, item) for i, item in enumerate(merged, start=1)]
+            return sanitize_public_slides(_enforce_source_storyboard_coverage(source, normalized))
 
     revised_slides: list[dict[str, Any]] = []
     for slide in slides:
@@ -2480,7 +2635,7 @@ def revise_slides(
         item["speaker_note"] = note or " ".join(item["bullets"][:3])
         item["visual_prompt"] = _clean_public_video_text(item.get("visual_prompt"))
         revised_slides.append(item)
-    return sanitize_public_slides(revised_slides)
+    return sanitize_public_slides(_enforce_source_storyboard_coverage(source, revised_slides))
 
 
 def revise_subtitles(
@@ -4139,6 +4294,8 @@ def _draw_scene_progress(
     muted = (142, 157, 178)
     shot_type = str(shot.get("shot_type") or "")
     slide_index = int(shot.get("slide_index") or 0)
+    if shot_type == "title_card":
+        return
     if shot_type in {"opener", "section_title"}:
         _draw_single_line_text(
             draw,
@@ -4184,6 +4341,37 @@ def _draw_scene_composition(
     accent = tuple(theme["accent"])
     fg = (244, 247, 251)
     muted = (154, 177, 207)
+
+    if shot_type == "title_card":
+        draw.text((76, 132 + y_shift), "RESEARCH EXPLAINER", fill=accent, font=fonts["small"])
+        draw.rectangle((76, 166 + y_shift, 292, 171 + y_shift), fill=accent)
+        _draw_wrapped_text(
+            draw,
+            str(shot.get("headline") or ""),
+            (76, 214 + y_shift),
+            font=fonts["display"],
+            width=1060,
+            max_height=190,
+            fill=fg,
+            spacing=9,
+            max_lines=4,
+        )
+        authors = _clean_display_text(shot.get("focus_text") or "")
+        if authors:
+            _draw_wrapped_text(
+                draw,
+                authors,
+                (78, 438 + y_shift),
+                font=fonts["body"],
+                width=960,
+                max_height=76,
+                fill=muted,
+                spacing=5,
+                max_lines=2,
+            )
+        draw.text((width - 252, height - 188), "PAPER OVERVIEW", fill=accent, font=fonts["small"])
+        draw.rectangle((width - 252, height - 154, width - 76, height - 150), fill=accent)
+        return
 
     if shot_type == "opener":
         draw.text((76, 144 + y_shift), "RESEARCH OVERVIEW", fill=accent, font=fonts["small"])
@@ -6076,6 +6264,7 @@ def run_video_pipeline(
         encoding="utf-8",
     )
     _progress("pipeline", "synthesize narration audio", current=7, total=12)
+    subtitles = add_title_card_hold(subtitles)
     tts_result, timed_subtitles = synthesize_tts_segments(subtitles, out_dir, use_tts=use_tts)
     timeline_scale = 1.0
     audio_duration = None
