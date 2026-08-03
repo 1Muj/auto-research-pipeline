@@ -68,6 +68,62 @@ def test_scene_focus_follows_the_metric_named_by_narration() -> None:
     assert index == 1
 
 
+def test_scene_focus_maps_spoken_number_to_numeric_speedup() -> None:
+    index = _scene_focus_index(
+        "This approach achieves a speedup of more than six times.",
+        bullets=[
+            "Cursor grounding aligns pointers with narration.",
+            "Parallel slide generation achieves 6x speedup.",
+            "WhisperX ensures temporal alignment.",
+        ],
+        visual_items=["6x Speedup", "Parallel Processing", "Temporal Alignment"],
+        fallback=2,
+    )
+
+    assert index == 1
+
+
+def test_multi_beat_metric_scene_keeps_each_explanation_visual() -> None:
+    slide = {
+        "index": 6,
+        "title": "Alignment and Efficiency",
+        "purpose": "Explain cursor grounding and parallelization.",
+        "bullets": [
+            "Cursor grounding aligns pointers with narration.",
+            "Parallel slide generation achieves 6x speedup.",
+            "WhisperX ensures precise temporal alignment.",
+        ],
+        "visual_kind": "metrics",
+        "visual_items": ["6x Speedup", "Parallel Processing", "Temporal Alignment"],
+        "scene_direction": {"layout": "comparison", "entrance": "fade_up", "emphasis": ""},
+    }
+    subtitles = [
+        {"slide_index": 6, "start_sec": 0, "end_sec": 12, "text": "A GUI-grounding model generates cursor trajectories."},
+        {"slide_index": 6, "start_sec": 12, "end_sec": 18, "text": "This helps viewers follow complex arguments."},
+        {"slide_index": 6, "start_sec": 18, "end_sec": 28, "text": "We parallelize generation across slides."},
+        {"slide_index": 6, "start_sec": 28, "end_sec": 40, "text": "This achieves a speedup of more than six times."},
+    ]
+
+    earlier_slides = [
+        {
+            "index": index,
+            "title": f"Chapter {index}",
+            "bullets": ["Context"],
+            "speaker_note": "Context",
+            "visual_kind": "image",
+        }
+        for index in range(1, 6)
+    ]
+    timeline = [
+        shot
+        for shot in build_scene_timeline({"title": "PaperTalker"}, [*earlier_slides, slide], subtitles)
+        if shot["slide_index"] == 6
+    ]
+
+    assert [shot["shot_type"] for shot in timeline] == ["metric", "metric", "metric", "metric"]
+    assert [shot["focus_index"] for shot in timeline] == [0, 0, 1, 1]
+
+
 def test_duplicate_placeholder_table_is_replaced_with_grounded_rows() -> None:
     slide = _normalize_slide(
         1,

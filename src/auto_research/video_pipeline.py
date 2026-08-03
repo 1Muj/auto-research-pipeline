@@ -1831,6 +1831,11 @@ def _scene_shot_sequence(
     if beat_count == 2:
         first = "opener" if slide_position == 1 else primary
         return [first, "synthesis"]
+    if visual_kind == "metrics" and beat_count >= 3:
+        sequence = ["metric"] * beat_count
+        if slide_position == 1:
+            sequence[0] = "opener"
+        return sequence
     if beat_count == 3:
         first = "opener" if slide_position == 1 else "section_title"
         return [first, primary, "synthesis"]
@@ -1850,10 +1855,29 @@ def _scene_focus_index(
     visual_items: list[str],
     fallback: int,
 ) -> int:
-    narration_folded = _clean_display_text(narration).casefold()
-    candidates = visual_items or bullets
+    number_words = {
+        "one": "1",
+        "two": "2",
+        "three": "3",
+        "four": "4",
+        "five": "5",
+        "six": "6",
+        "seven": "7",
+        "eight": "8",
+        "nine": "9",
+        "ten": "10",
+    }
+
+    def normalize_match_text(value: str) -> str:
+        normalized = _clean_display_text(value).casefold()
+        for word, digit in number_words.items():
+            normalized = re.sub(rf"\b{word}\s+times\b", f"{digit}x", normalized)
+        return re.sub(r"\bparalleliz(?:e|es|ed|ing)\b", "parallel", normalized)
+
+    narration_folded = normalize_match_text(narration)
+    candidates = bullets or visual_items
     for index, candidate in enumerate(candidates):
-        cleaned = _clean_display_text(candidate)
+        cleaned = normalize_match_text(candidate)
         label = cleaned.split(":", 1)[0].strip().casefold()
         if label and len(label) >= 3 and label in narration_folded:
             return index
@@ -1862,15 +1886,20 @@ def _scene_focus_index(
     best_index = -1
     best_score = 0
     for index, candidate in enumerate(candidates):
-        candidate_tokens = set(re.findall(r"[a-z0-9]+(?:x|%)?", _clean_display_text(candidate).casefold())) - stop_words
+        candidate_tokens = set(re.findall(r"[a-z0-9]+(?:x|%)?", normalize_match_text(candidate))) - stop_words
         overlap = narration_tokens & candidate_tokens
-        score = sum(3 if re.search(r"\d", token) else 1 for token in overlap)
+        score = sum(3 if re.search(r"\d", token) else 2 if len(token) >= 7 else 1 for token in overlap)
         if score > best_score:
             best_index = index
             best_score = score
     if best_index >= 0 and best_score >= 2:
         return best_index
     return min(fallback, max(0, len(candidates) - 1))
+
+
+def _scene_narration_is_anaphoric(narration: str) -> bool:
+    cleaned = _clean_display_text(narration).casefold()
+    return bool(re.match(r"^(?:this|that|it|these|those|such an? approach)\b", cleaned))
 
 
 def build_scene_timeline(
@@ -1946,18 +1975,26 @@ def build_scene_timeline(
             has_generated_image=has_generated_image,
         )
         asset_cursor = 0
+        previous_focus_index: int | None = None
         for beat_index, beat in enumerate(beats):
             start = float(beat.get("start_sec") or 0)
             end = max(start + 1.0, float(beat.get("end_sec") or start + 5.0))
             is_first = beat_index == 0
             shot_type = shot_sequence[beat_index]
 
+            narration = str(beat.get("text") or "")
+            focus_fallback = (
+                previous_focus_index
+                if previous_focus_index is not None and _scene_narration_is_anaphoric(narration)
+                else beat_index
+            )
             focus_index = _scene_focus_index(
-                str(beat.get("text") or ""),
+                narration,
                 bullets=bullets,
                 visual_items=visual_items,
-                fallback=beat_index,
+                fallback=focus_fallback,
             )
+            previous_focus_index = focus_index
             if focus_index < len(bullets):
                 focus_text = bullets[focus_index]
             elif focus_index < len(visual_items):
@@ -4535,7 +4572,33 @@ def _draw_scene_metric(
     )
     narration = _clean_display_text(shot.get("narration") or "")
     layout = str(shot.get("layout_variant") or "data_wall")
-    if layout == "comparison" and re.search(r"\b\d+(?:\.\d+)?\s*[x×%]", narration, flags=re.IGNORECASE):
+    focus_index = min(int(shot.get("focus_index") or 0), max(0, len(bullets) - 1))
+    focus_text = " ".join([narration, bullets[focus_index] if bullets else ""]).casefold()
+    if any(token in focus_text for token in ("cursor", "grounding", "whisperx", "temporal alignment")):
+        _draw_scene_cursor_grounding(
+            draw,
+            box,
+            reveal=reveal,
+            accent=accent,
+            fonts=fonts,
+        )
+        return
+    narration_folded = narration.casefold()
+    describes_speed = bool(
+        re.search(r"\b\d+(?:\.\d+)?\s*[x×%]", narration_folded)
+        or any(token in narration_folded for token in ("speedup", "faster", "times compared", "times faster"))
+    )
+    if layout == "comparison" and "parallel" in narration_folded and not describes_speed:
+        _draw_scene_parallel_mechanism(
+            draw,
+            shot,
+            box,
+            reveal=reveal,
+            accent=accent,
+            fonts=fonts,
+        )
+        return
+    if layout == "comparison" and re.search(r"\b\d+(?:\.\d+)?\s*[x×%]", focus_text, flags=re.IGNORECASE):
         _draw_scene_metric_comparison(
             draw,
             slide,
@@ -4546,7 +4609,7 @@ def _draw_scene_metric(
             fonts=fonts,
         )
         return
-    if layout == "comparison" and "parallel" in " ".join([narration, *items, *bullets]).casefold():
+    if layout == "comparison" and "parallel" in focus_text:
         _draw_scene_parallel_mechanism(
             draw,
             shot,
@@ -4583,6 +4646,61 @@ def _draw_scene_metric(
         draw.text((list_x, y + 6), small_value, fill=accent, font=fonts["small"])
         _draw_single_line_text(draw, small_label, (list_x + 110, y + 6), font=fonts["small"], width=440, fill=(194, 208, 226))
         draw.line((list_x, y + 42, min(x2, list_x + 540), y + 42), fill=(38, 60, 82), width=1)
+
+
+def _draw_scene_cursor_grounding(
+    draw: Any,
+    box: tuple[int, int, int, int],
+    *,
+    reveal: float,
+    accent: tuple[int, int, int],
+    fonts: dict[str, Any],
+) -> None:
+    x1, y1, x2, y2 = box
+    stages = [
+        ("NARRATION", "Current sentence"),
+        ("GUI GROUNDING", "Visual target"),
+        ("CURSOR", "Screen coordinate"),
+    ]
+    gap = 34
+    node_width = (x2 - x1 - gap * 2) // 3
+    visible = max(1, min(len(stages), int(math.ceil(reveal * len(stages)))))
+    center_y = y1 + 104
+    for index, (label, detail) in enumerate(stages):
+        if index >= visible:
+            continue
+        node_x = x1 + index * (node_width + gap)
+        active = index == visible - 1
+        if index:
+            draw.line((node_x - gap + 5, center_y + 40, node_x - 7, center_y + 40), fill=accent, width=3)
+            draw.polygon(
+                [(node_x - 10, center_y + 33), (node_x, center_y + 40), (node_x - 10, center_y + 47)],
+                fill=accent,
+            )
+        draw.rounded_rectangle(
+            (node_x, center_y, node_x + node_width, center_y + 82),
+            radius=6,
+            fill=(10, 29, 39) if active else (9, 20, 32),
+            outline=accent if active else (55, 82, 108),
+            width=2,
+        )
+        draw.text((node_x + 18, center_y + 14), label, fill=accent if active else (168, 187, 210), font=fonts["small"])
+        draw.text((node_x + 18, center_y + 46), detail, fill=(232, 239, 248), font=fonts["small"])
+
+    timeline_y = y1 + 244
+    draw.text((x1, timeline_y), "WHISPERX TEMPORAL ALIGNMENT", fill=accent, font=fonts["small"])
+    draw.line((x1, timeline_y + 48, x2, timeline_y + 48), fill=(53, 80, 105), width=2)
+    tick_count = 9
+    for index in range(tick_count):
+        tick_x = x1 + int((x2 - x1) * index / (tick_count - 1))
+        amplitude = 8 + (index * 7) % 24
+        draw.line(
+            (tick_x, timeline_y + 48 - amplitude, tick_x, timeline_y + 48 + amplitude),
+            fill=accent if index < int(reveal * tick_count) else (42, 66, 89),
+            width=3,
+        )
+    marker_x = x1 + int((x2 - x1) * min(1.0, reveal))
+    draw.ellipse((marker_x - 7, timeline_y + 41, marker_x + 7, timeline_y + 55), fill=(240, 246, 252), outline=accent, width=2)
 
 
 def _draw_scene_parallel_mechanism(
