@@ -52,6 +52,8 @@ DEFAULT_DIMENSIONS = [
             "repeated interface template",
             "duplicate labels or placeholder table cells",
             "the same entrance animation across consecutive shots",
+            "the same generated image reused across multiple explanatory beats",
+            "image motion limited to a static slide-like hold",
             "irrelevant visuals",
             "weak hierarchy",
         ],
@@ -800,8 +802,12 @@ def summarize_artifact_context(artifact_context: dict[str, Any]) -> dict[str, An
             "hold_sec": item.get("hold_sec"),
             "shot_type": item.get("shot_type"),
             "composition_variant": item.get("composition_variant"),
+            "layout_variant": item.get("layout_variant"),
+            "entrance": item.get("entrance"),
             "background_stage": item.get("background_stage"),
             "motion": item.get("motion"),
+            "visual_asset_kind": item.get("visual_asset_kind"),
+            "visual_asset_name": Path(str(item.get("visual_asset_path"))).name if item.get("visual_asset_path") else "",
             "focus_text": _truncate_text(item.get("focus_text"), 220),
         }
         for item in scene_timeline[:32]

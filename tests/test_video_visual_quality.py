@@ -17,6 +17,8 @@ from auto_research.video_pipeline import (
     _normalize_slide,
     _scene_focus_index,
     _scene_item_detail,
+    assign_paper_figures,
+    generate_slide_images,
     plan_scene_directions,
 )
 
@@ -130,6 +132,81 @@ def test_scene_entrances_produce_distinct_intermediate_frames() -> None:
     frames = [_apply_scene_entrance(layer, entrance, 0.5) for entrance in ("fade_up", "slide_left", "slide_right", "scale_in", "wipe")]
 
     assert len({frame.tobytes() for frame in frames}) == 5
+
+
+def test_image_generation_creates_multiple_assets_for_non_image_slides(tmp_path: Path, monkeypatch) -> None:
+    calls: list[Path] = []
+
+    def fake_image_api(_prompt: str, out: Path) -> tuple[bool, str]:
+        Image.new("RGB", (640, 360), (20 + len(calls), 40, 60)).save(out)
+        calls.append(out)
+        return True, ""
+
+    monkeypatch.setenv("AUTO_VIDEO_IMAGE_MODE", "all")
+    monkeypatch.setenv("AUTO_VIDEO_IMAGES_PER_SLIDE", "2")
+    monkeypatch.setenv("AUTO_VIDEO_IMAGE_VALIDATE", "0")
+    monkeypatch.setattr("auto_research.video_pipeline._call_lumid_image", fake_image_api)
+    slides = [
+        {
+            "index": 1,
+            "title": "Parallel pipeline",
+            "purpose": "Explain the mechanism.",
+            "bullets": ["Independent tasks run in parallel.", "The method reports a 6x speedup."],
+            "visual_kind": "flow",
+            "visual_items": ["Input", "Parallel workers", "Output"],
+        }
+    ]
+
+    results = generate_slide_images(slides, tmp_path, use_image_api=True)
+
+    assert len(calls) == 2
+    assert len(slides[0]["generated_image_paths"]) == 2
+    assert len(slides[0]["visual_asset_paths"]) == 2
+    assert all(item["ok"] for item in results)
+
+
+def test_scene_timeline_rotates_visual_assets_between_image_shots(tmp_path: Path) -> None:
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.png"
+    Image.new("RGB", (640, 360), "red").save(first)
+    Image.new("RGB", (640, 360), "blue").save(second)
+    slide = {
+        "index": 1,
+        "title": "Visual mechanism",
+        "purpose": "Show distinct visual beats.",
+        "bullets": ["Problem", "Mechanism", "Result"],
+        "visual_kind": "image",
+        "visual_asset_paths": [str(first), str(second)],
+    }
+    subtitles = [
+        {"slide_index": 1, "start_sec": i * 6, "end_sec": (i + 1) * 6, "text": f"Beat {i + 1}"}
+        for i in range(4)
+    ]
+
+    timeline = build_scene_timeline({"title": "Assets"}, [slide], subtitles)
+    image_shots = [shot for shot in timeline if shot["visual_asset_path"]]
+
+    assert [shot["visual_asset_path"] for shot in image_shots] == [str(first), str(second)]
+
+
+def test_paper_figures_are_assigned_by_page_text_without_reuse(tmp_path: Path) -> None:
+    figure_a = tmp_path / "dataset.png"
+    figure_b = tmp_path / "architecture.png"
+    Image.new("RGB", (640, 360), "white").save(figure_a)
+    Image.new("RGB", (640, 360), "black").save(figure_b)
+    figures = [
+        {"path": str(figure_a), "page_text": "benchmark dataset contains paired papers and author videos", "width": 640, "height": 360},
+        {"path": str(figure_b), "page_text": "multi agent architecture coordinates slide speech and cursor modules", "width": 640, "height": 360},
+    ]
+    slides = [
+        {"title": "Benchmark Dataset", "purpose": "Explain paired papers", "bullets": ["Author videos form the dataset."]},
+        {"title": "Agent Architecture", "purpose": "Explain coordinated modules", "bullets": ["Agents coordinate speech and cursor."]},
+    ]
+
+    assign_paper_figures(slides, figures)
+
+    assert slides[0]["paper_figure_paths"] == [str(figure_a)]
+    assert slides[1]["paper_figure_paths"] == [str(figure_b)]
 
 
 def test_image_prompt_is_specific_and_requires_complete_framing() -> None:

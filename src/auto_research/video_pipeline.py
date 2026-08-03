@@ -604,11 +604,12 @@ def _call_lumid_image(prompt: str, out: Path) -> tuple[bool, str]:
         return False, f"{type(exc).__name__}: {exc}"
 
 
-def _image_generation_prompt(slide: dict[str, Any]) -> str:
+def _image_generation_prompt(slide: dict[str, Any], *, variant_index: int = 0) -> str:
     bullets = [_clean_display_text(item) for item in slide.get("bullets", []) if str(item).strip()]
     caption = _clean_display_text(slide.get("visual_caption"))
     intent = _clean_display_text(slide.get("visual_prompt"))
-    visual_concept = intent or caption or (bullets[0] if bullets else "A clear research workflow")
+    focus = bullets[variant_index % len(bullets)] if bullets else ""
+    visual_concept = " ".join(part for part in (intent, focus) if part) or caption or "A clear research workflow"
     visual_concept = re.sub(r"\bslides?\b", "visual panels", visual_concept, flags=re.I)
     visual_concept = re.sub(r"\bpresentations?\b", "spoken explanations", visual_concept, flags=re.I)
     visual_concept = re.sub(r"\bsplit[- ]screen\b", "balanced left-right composition", visual_concept, flags=re.I)
@@ -622,6 +623,13 @@ def _image_generation_prompt(slide: dict[str, Any]) -> str:
             "Use unlabelled shapes and symbols only. The image contains no words, letters, numbers, logos, controls, menus, or framed page.",
             "Keep every important object fully visible with eight percent empty safe margin on all four sides.",
             "Clean flat-vector style, strong silhouette, restrained color palette, no nested canvas.",
+            (
+                "Use a close explanatory composition centered on the mechanism and its interacting parts."
+                if variant_index % 3 == 1
+                else "Use a wider contextual composition that makes cause and effect immediately visible."
+                if variant_index % 3 == 2
+                else "Use a balanced editorial composition with one unmistakable visual hierarchy."
+            ),
         ]
     ).strip()
 
@@ -676,94 +684,265 @@ def _validate_generated_slide_image(slide: dict[str, Any], image_path: Path) -> 
     }
 
 
+def extract_paper_figures(source: dict[str, Any], out_dir: Path) -> list[dict[str, Any]]:
+    source_path = Path(str(source.get("source_path") or "")).expanduser()
+    if source_path.suffix.lower() != ".pdf" or not source_path.is_file():
+        return []
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        return []
+
+    figure_dir = out_dir / "paper_figures"
+    figure_dir.mkdir(parents=True, exist_ok=True)
+    max_figures = max(0, int(os.environ.get("AUTO_VIDEO_MAX_PAPER_FIGURES", "24")))
+    min_width = max(120, int(os.environ.get("AUTO_VIDEO_PAPER_FIGURE_MIN_WIDTH", "320")))
+    min_height = max(90, int(os.environ.get("AUTO_VIDEO_PAPER_FIGURE_MIN_HEIGHT", "180")))
+    candidates: list[dict[str, Any]] = []
+    seen_hashes: set[str] = set()
+    try:
+        reader = PdfReader(str(source_path))
+        for page_index, page in enumerate(reader.pages[:30], start=1):
+            page_text = _clean_display_text(page.extract_text() or "")[:5000]
+            for image_index, image_file in enumerate(list(page.images)[:8], start=1):
+                if len(candidates) >= max_figures:
+                    break
+                digest = hashlib.sha256(image_file.data).hexdigest()
+                if digest in seen_hashes:
+                    continue
+                image = image_file.image
+                width, height = image.size
+                if width < min_width or height < min_height:
+                    continue
+                if width / max(1, height) > 5.5 or height / max(1, width) > 4.0:
+                    continue
+                path = figure_dir / f"page_{page_index:02d}_figure_{image_index:02d}.png"
+                image.convert("RGB").save(path)
+                seen_hashes.add(digest)
+                candidates.append(
+                    {
+                        "id": f"p{page_index:02d}f{image_index:02d}",
+                        "page": page_index,
+                        "path": str(path.resolve()),
+                        "width": width,
+                        "height": height,
+                        "page_text": page_text,
+                    }
+                )
+            if len(candidates) >= max_figures:
+                break
+    except Exception as exc:
+        _progress("paper_figure", "figure extraction failed", detail=f"{type(exc).__name__}: {str(exc)[:140]}")
+    public_candidates = [{k: v for k, v in item.items() if k != "page_text"} for item in candidates]
+    (out_dir / "paper_figure_index.json").write_text(
+        json.dumps(public_candidates, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    _progress("paper_figure", "paper figures extracted", detail=f"count={len(candidates)}")
+    return candidates
+
+
+def _validate_paper_figure_for_slide(slide: dict[str, Any], image_path: Path) -> dict[str, Any]:
+    prompt = textwrap.dedent(
+        f"""
+        Decide whether this image extracted from the source PDF directly supports the current explainer section.
+        Return JSON only:
+        {{"accepted":true,"relevance_score":0-10,"is_source_evidence":true,"reasons":[]}}
+
+        Accept genuine architecture diagrams, method figures, dataset charts, result plots, or qualitative examples from the source paper that clarify this exact section.
+        Reject logos, decorative icons, author photos, generic cover art, screenshots of unrelated papers or presentations, and figures whose subject does not match the section.
+        Original labels and legends are allowed. Require relevance_score of at least 7.5.
+
+        Section title: {_clean_display_text(slide.get('title'))}
+        Section purpose: {_clean_display_text(slide.get('purpose'))}
+        Claims: {json.dumps([_clean_display_text(item) for item in slide.get('bullets', [])], ensure_ascii=False)}
+        """
+    ).strip()
+    data = _json_from_model(_call_openai_vision(prompt, image_path))
+    if not isinstance(data, dict) or not data:
+        return {"accepted": False, "relevance_score": 0.0, "is_source_evidence": False, "reasons": ["No valid VLM decision."]}
+    try:
+        score = float(data.get("relevance_score") or 0.0)
+    except (TypeError, ValueError):
+        score = 0.0
+    evidence = bool(data.get("is_source_evidence"))
+    accepted = bool(data.get("accepted")) and score >= 7.5 and evidence
+    return {
+        "accepted": accepted,
+        "relevance_score": max(0.0, min(10.0, score)),
+        "is_source_evidence": evidence,
+        "reasons": [str(item) for item in data.get("reasons", []) if str(item).strip()],
+    }
+
+
+def assign_paper_figures(
+    slides: list[dict[str, Any]],
+    figures: list[dict[str, Any]],
+    *,
+    validate_with_vlm: bool = False,
+) -> None:
+    used_paths: set[str] = set()
+    max_per_slide = max(0, int(os.environ.get("AUTO_VIDEO_PAPER_FIGURES_PER_SLIDE", "1")))
+    stop_words = {
+        "this", "that", "with", "from", "into", "using", "paper", "video", "slide", "slides",
+        "generation", "presentation", "research", "method", "result", "results",
+    }
+
+    def tokens(value: str) -> set[str]:
+        return {
+            token
+            for token in re.findall(r"[a-z0-9]+", value.casefold())
+            if len(token) >= 4 and token not in stop_words
+        }
+
+    for slide in slides:
+        slide_text = " ".join(
+            [
+                str(slide.get("title") or ""),
+                str(slide.get("purpose") or ""),
+                *[str(item) for item in slide.get("bullets") or []],
+            ]
+        )
+        slide_tokens = tokens(slide_text)
+        ranked: list[tuple[float, dict[str, Any]]] = []
+        for figure in figures:
+            path = str(figure.get("path") or "")
+            if not path or path in used_paths:
+                continue
+            page_tokens = tokens(str(figure.get("page_text") or ""))
+            overlap = slide_tokens & page_tokens
+            score = float(len(overlap)) + min(1.5, len(overlap) / max(1, len(slide_tokens)) * 4.0)
+            score += min(1.0, (int(figure.get("width") or 0) * int(figure.get("height") or 0)) / 1_500_000)
+            ranked.append((score, figure))
+        selected: list[dict[str, Any]] = []
+        validations: list[dict[str, Any]] = []
+        candidate_limit = max(max_per_slide, int(os.environ.get("AUTO_VIDEO_PAPER_FIGURE_VALIDATION_CANDIDATES", "4")))
+        for score, candidate in sorted(ranked, key=lambda pair: pair[0], reverse=True)[:candidate_limit]:
+            if score < 1.2 or len(selected) >= max_per_slide:
+                continue
+            decision = (
+                _validate_paper_figure_for_slide(slide, Path(str(candidate["path"])))
+                if validate_with_vlm
+                else {"accepted": True, "relevance_score": None, "is_source_evidence": None, "reasons": ["Text relevance assignment"]}
+            )
+            validations.append({"path": str(candidate["path"]), "text_score": round(score, 3), **decision})
+            if decision.get("accepted"):
+                selected.append(candidate)
+        paths = [str(item["path"]) for item in selected]
+        slide["paper_figure_paths"] = paths
+        slide["paper_figure_validation"] = validations
+        used_paths.update(paths)
+
+
 def generate_slide_images(slides: list[dict[str, Any]], out_dir: Path, *, use_image_api: bool) -> list[dict[str, Any]]:
     image_dir = out_dir / "generated_images"
     image_dir.mkdir(parents=True, exist_ok=True)
     results: list[dict[str, Any]] = []
-    total = len(slides)
+    image_mode = os.environ.get("AUTO_VIDEO_IMAGE_MODE", "all").strip().lower()
+    variants_per_slide = max(1, int(os.environ.get("AUTO_VIDEO_IMAGES_PER_SLIDE", "2")))
+    total = len(slides) * variants_per_slide
     _progress(
         "image_builder",
         "start slide visual generation",
         current=0,
         total=total,
-        detail=f"api={'on' if use_image_api else 'off'} model={os.environ.get('LUMID_IMAGE_MODEL') or os.environ.get('LUM_IMAGE_MODEL') or LUMID_IMAGE_MODEL}",
+        detail=f"api={'on' if use_image_api else 'off'} mode={image_mode} variants={variants_per_slide} model={os.environ.get('LUMID_IMAGE_MODEL') or os.environ.get('LUM_IMAGE_MODEL') or LUMID_IMAGE_MODEL}",
     )
     for n, slide in enumerate(slides, start=1):
-        prompt = _image_generation_prompt(slide)
-        path = image_dir / f"slide_{int(slide['index']):02d}.png"
-        image_mode = os.environ.get("AUTO_VIDEO_IMAGE_MODE", "image_only").strip().lower()
         slide_kind = str(slide.get("visual_kind") or "image").strip().lower()
-        should_generate = use_image_api and (
+        eligible = (
             image_mode in {"all", "1", "true", "yes"}
             or (image_mode in {"image_only", "images"} and slide_kind == "image")
         )
-        ok = path.is_file() and path.stat().st_size > 0
-        error = "" if ok else "not requested"
-        validation: dict[str, Any] = {}
+        generated_paths: list[str] = []
         validate_images = os.environ.get("AUTO_VIDEO_IMAGE_VALIDATE", "1").strip().lower() not in {"0", "false", "no", "off"}
         max_attempts = max(1, int(os.environ.get("AUTO_VIDEO_IMAGE_MAX_ATTEMPTS", "3")))
-        if ok and should_generate and validate_images:
-            validation = _validate_generated_slide_image(slide, path)
-            ok = bool(validation.get("accepted"))
-            if not ok:
-                error = "cached image rejected: " + "; ".join(validation.get("reasons") or ["failed completeness or relevance checks"])
-        elif ok:
-            _progress("image_builder", "using cached image", current=n, total=total, detail=f"slide={slide['index']} path={path.name}")
-        if not ok and should_generate:
-            for attempt in range(1, max_attempts + 1):
-                attempt_prompt = prompt
-                if attempt == 2:
-                    attempt_prompt += " Use a physical metaphor with characters and tangible objects placed directly on the background."
-                elif attempt >= 3:
-                    attempt_prompt += " Use a minimal abstract composition of large unlabelled icons connected by arrows, with no rectangular panels."
-                _progress(
-                    "image_builder",
-                    "calling image model",
-                    current=n,
-                    total=total,
-                    detail=f"slide={slide['index']} attempt={attempt}/{max_attempts} title={str(slide.get('title', ''))[:60]}",
-                )
-                ok, error = _call_lumid_image(attempt_prompt, path)
-                if ok and validate_images:
-                    validation = _validate_generated_slide_image(slide, path)
-                    ok = bool(validation.get("accepted"))
-                    if not ok:
-                        error = "image rejected: " + "; ".join(validation.get("reasons") or ["failed completeness or relevance checks"])
-                if ok:
-                    break
+        prompts: list[str] = []
+        for variant_index in range(variants_per_slide):
+            progress_index = (n - 1) * variants_per_slide + variant_index + 1
+            prompt = _image_generation_prompt(slide, variant_index=variant_index)
+            prompts.append(prompt)
+            path = image_dir / f"slide_{int(slide['index']):02d}_v{variant_index + 1:02d}.png"
+            ok = eligible and path.is_file() and path.stat().st_size > 0
+            error = "" if ok else "not requested"
+            validation: dict[str, Any] = {}
+            if ok and validate_images:
+                validation = _validate_generated_slide_image(slide, path)
+                ok = bool(validation.get("accepted"))
+                if not ok:
+                    error = "cached image rejected: " + "; ".join(validation.get("reasons") or ["failed completeness or relevance checks"])
+            elif ok:
+                _progress("image_builder", "using cached image", current=progress_index, total=total, detail=f"slide={slide['index']} variant={variant_index + 1}")
+            if not ok and eligible and use_image_api:
+                for attempt in range(1, max_attempts + 1):
+                    attempt_prompt = prompt
+                    if attempt == 2:
+                        attempt_prompt += " Use a physical metaphor with characters and tangible objects placed directly on the background."
+                    elif attempt >= 3:
+                        attempt_prompt += " Use a minimal abstract composition of large unlabelled icons connected by arrows, with no rectangular panels."
+                    _progress(
+                        "image_builder",
+                        "calling image model",
+                        current=progress_index,
+                        total=total,
+                        detail=f"slide={slide['index']} variant={variant_index + 1} attempt={attempt}/{max_attempts} title={str(slide.get('title', ''))[:52]}",
+                    )
+                    ok, error = _call_lumid_image(attempt_prompt, path)
+                    if ok and validate_images:
+                        validation = _validate_generated_slide_image(slide, path)
+                        ok = bool(validation.get("accepted"))
+                        if not ok:
+                            error = "image rejected: " + "; ".join(validation.get("reasons") or ["failed completeness or relevance checks"])
+                    if ok:
+                        break
+            if ok:
+                generated_paths.append(str(path.resolve()))
+            else:
+                reason = error if eligible and use_image_api else "api disabled" if eligible else f"mode={image_mode} kind={slide_kind}"
+                error = reason
             _progress(
                 "image_builder",
-                "image accepted" if ok else "image failed",
-                current=n,
+                "image accepted" if ok else "image skipped" if not eligible else "image failed",
+                current=progress_index,
                 total=total,
-                detail=f"slide={slide['index']} path={path.name if ok else ''} error={error[:120] if error else ''}",
+                detail=f"slide={slide['index']} variant={variant_index + 1} path={path.name if ok else ''} error={error[:110] if error else ''}",
             )
-        elif not ok:
-            reason = "api disabled" if not use_image_api else f"mode={image_mode} kind={slide_kind}"
-            _progress("image_builder", "image skipped", current=n, total=total, detail=f"slide={slide['index']} {reason}")
-        slide["generated_image_prompt"] = prompt
-        slide["generated_image_path"] = str(path.resolve()) if ok else ""
-        results.append(
-            {
-                "slide_index": int(slide["index"]),
-                "ok": ok,
-                "model": os.environ.get("LUMID_IMAGE_MODEL") or os.environ.get("LUM_IMAGE_MODEL") or LUMID_IMAGE_MODEL,
-                "path": str(path.resolve()) if ok else "",
-                "prompt": prompt,
-                "validation": validation,
-                "error": "" if ok else error,
-            }
-        )
-        (out_dir / "image_generation.json").write_text(
-            json.dumps(results, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+            results.append(
+                {
+                    "slide_index": int(slide["index"]),
+                    "variant_index": variant_index + 1,
+                    "asset_kind": "generated",
+                    "ok": ok,
+                    "model": os.environ.get("LUMID_IMAGE_MODEL") or os.environ.get("LUM_IMAGE_MODEL") or LUMID_IMAGE_MODEL,
+                    "path": str(path.resolve()) if ok else "",
+                    "prompt": prompt,
+                    "validation": validation,
+                    "error": "" if ok else error,
+                }
+            )
+            (out_dir / "image_generation.json").write_text(
+                json.dumps(results, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        paper_paths = [str(path) for path in slide.get("paper_figure_paths") or [] if Path(str(path)).is_file()]
+        visual_assets: list[str] = []
+        for index in range(max(len(generated_paths), len(paper_paths))):
+            if index < len(generated_paths):
+                visual_assets.append(generated_paths[index])
+            if index < len(paper_paths):
+                visual_assets.append(paper_paths[index])
+        slide["generated_image_prompts"] = prompts
+        slide["generated_image_paths"] = generated_paths
+        slide["visual_asset_paths"] = visual_assets
+        slide["generated_image_prompt"] = prompts[0] if prompts else ""
+        slide["generated_image_path"] = visual_assets[0] if visual_assets else ""
     (out_dir / "image_generation.json").write_text(
         json.dumps(results, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
     ok_count = sum(1 for item in results if item.get("ok"))
-    _progress("image_builder", "finished slide visual generation", current=total, total=total, detail=f"ok={ok_count}/{total}")
+    figure_count = sum(len(slide.get("paper_figure_paths") or []) for slide in slides)
+    _progress("image_builder", "finished slide visual generation", current=total, total=total, detail=f"generated={ok_count}/{total} paper_figures={figure_count}")
     return results
 
 
@@ -1641,9 +1820,9 @@ def _scene_shot_sequence(
         "image": "image_focus" if has_generated_image else "key_claim",
     }.get(visual_kind, "key_claim")
     detail = {
-        "flow": "process_focus",
-        "table": "evidence_focus",
-        "metrics": "metric",
+        "flow": "detail_focus" if has_generated_image else "process_focus",
+        "table": "detail_focus" if has_generated_image else "evidence_focus",
+        "metrics": "detail_focus" if has_generated_image else "metric",
         "image": "detail_focus" if has_generated_image else "contrast",
     }.get(visual_kind, "contrast")
 
@@ -1754,14 +1933,19 @@ def build_scene_timeline(
         )
         bullets = [_clean_display_text(item) for item in slide.get("bullets", []) if str(item).strip()]
         visual_items = [_clean_visual_item(str(item)) for item in slide.get("visual_items", []) if str(item).strip()]
-        generated_image_path = str(slide.get("generated_image_path") or "")
-        has_generated_image = bool(generated_image_path and Path(generated_image_path).is_file())
+        visual_asset_paths = [
+            str(path)
+            for path in (slide.get("visual_asset_paths") or [slide.get("generated_image_path")])
+            if str(path) and Path(str(path)).is_file()
+        ]
+        has_generated_image = bool(visual_asset_paths)
         shot_sequence = _scene_shot_sequence(
             visual_kind=visual_kind,
             beat_count=len(beats),
             slide_position=slide_position,
             has_generated_image=has_generated_image,
         )
+        asset_cursor = 0
         for beat_index, beat in enumerate(beats):
             start = float(beat.get("start_sec") or 0)
             end = max(start + 1.0, float(beat.get("end_sec") or start + 5.0))
@@ -1788,6 +1972,10 @@ def build_scene_timeline(
             hold_sec = max(0.0, duration - animation_sec)
             base_entrance_index = SCENE_ENTRANCES.index(scene_direction["entrance"])
             entrance = SCENE_ENTRANCES[(base_entrance_index + beat_index) % len(SCENE_ENTRANCES)]
+            visual_asset_path = ""
+            if shot_type in {"image_focus", "detail_focus"} and visual_asset_paths:
+                visual_asset_path = visual_asset_paths[asset_cursor % len(visual_asset_paths)]
+                asset_cursor += 1
             timeline.append(
                 {
                     "shot_id": f"s{slide_index:02d}-{beat_index + 1:02d}",
@@ -1808,6 +1996,8 @@ def build_scene_timeline(
                     "focus_index": focus_index,
                     "visual_kind": visual_kind,
                     "has_generated_image": has_generated_image,
+                    "visual_asset_path": visual_asset_path,
+                    "visual_asset_kind": "paper_figure" if "paper_figures" in visual_asset_path else "generated" if visual_asset_path else "none",
                     "composition_variant": (slide_index + beat_index) % 4,
                     "layout_variant": scene_direction["layout"],
                     "entrance": entrance,
@@ -3300,7 +3490,14 @@ def _draw_visual_image(draw: Any, slide: dict[str, Any], box: tuple[int, int, in
         )
 
 
-def _draw_generated_image(draw: Any, slide: dict[str, Any], box: tuple[int, int, int, int]) -> bool:
+def _draw_generated_image(
+    draw: Any,
+    slide: dict[str, Any],
+    box: tuple[int, int, int, int],
+    *,
+    motion_progress: float = 0.0,
+    motion_style: str = "static",
+) -> bool:
     image_path = str(slide.get("generated_image_path") or "")
     if not image_path:
         return False
@@ -3330,6 +3527,23 @@ def _draw_generated_image(draw: Any, slide: dict[str, Any], box: tuple[int, int,
         paste_x = max(0, (target[0] - image.size[0]) // 2)
         paste_y = max(0, (target[1] - image.size[1]) // 2)
         frame.paste(image, (paste_x, paste_y))
+        progress = max(0.0, min(1.0, motion_progress))
+        if motion_style != "static" and progress > 0:
+            zoom = 1.0 + 0.045 * progress
+            zoomed = frame.resize(
+                (max(target[0], int(target[0] * zoom)), max(target[1], int(target[1] * zoom))),
+                Image.Resampling.LANCZOS,
+            )
+            extra_x = max(0, zoomed.width - target[0])
+            extra_y = max(0, zoomed.height - target[1])
+            if motion_style == "pan_right":
+                crop_x = int(extra_x * progress)
+            elif motion_style == "pan_left":
+                crop_x = int(extra_x * (1.0 - progress))
+            else:
+                crop_x = extra_x // 2
+            crop_y = extra_y // 2
+            frame = zoomed.crop((crop_x, crop_y, crop_x + target[0], crop_y + target[1]))
         canvas.paste(frame, (x1 + pad, y1 + pad))
         draw.rounded_rectangle(box, radius=10, outline=(35, 90, 130), width=2)
         return True
@@ -3634,6 +3848,9 @@ def _render_scene_mp4_video(
     _progress("renderer", "start scene-based rendering", current=0, total=len(timeline), detail=f"fps={fps} shots={len(timeline)}")
     for shot_position, shot in enumerate(timeline, start=1):
         slide = slide_lookup.get(int(shot["slide_index"]), {})
+        render_slide = dict(slide)
+        if shot.get("visual_asset_path"):
+            render_slide["generated_image_path"] = str(shot["visual_asset_path"])
         duration = max(1.0 / max(1, fps), float(shot["end_sec"]) - float(shot["start_sec"]))
         frame_count = max(1, int(round(duration * fps)))
         _progress(
@@ -3648,7 +3865,7 @@ def _render_scene_mp4_video(
             local = tick / max(1, frame_count - 1)
             img = Image.new("RGB", (width, height), background_color)
             draw = ImageDraw.Draw(img)
-            _draw_scene_background(draw, width, height, sec, source=source, slide=slide, shot=shot)
+            _draw_scene_background(draw, width, height, sec, source=source, slide=render_slide, shot=shot)
             _draw_scene_progress(
                 draw,
                 shot,
@@ -3663,7 +3880,7 @@ def _render_scene_mp4_video(
             content_draw = ImageDraw.Draw(content_layer)
             _draw_scene_composition(
                 content_draw,
-                slide,
+                render_slide,
                 shot,
                 theme=theme,
                 width=width,
@@ -3949,8 +4166,14 @@ def _draw_scene_composition(
             max_lines=6,
         )
         image_shift = int((1.0 - reveal) * 44)
-        image_box = (590 + image_shift, 164, width - 76 + image_shift, height - 174)
-        if not _draw_generated_image(draw, slide, image_box):
+        image_box = (590 + image_shift, 180, width - 76 + image_shift, height - 174)
+        if not _draw_generated_image(
+            draw,
+            slide,
+            image_box,
+            motion_progress=local,
+            motion_style="pan_left" if int(shot.get("composition_variant") or 0) % 2 else "push_in",
+        ):
             _draw_scene_visual_fallback(draw, slide, image_box, reveal=reveal, fonts=fonts)
         draw.rectangle((76, 470, 486, 474), fill=accent)
         _draw_single_line_text(
@@ -3962,16 +4185,24 @@ def _draw_scene_composition(
             fill=muted,
         )
     elif shot_type == "detail_focus":
-        image_box = (70, 140, 742, height - 158)
-        if not _draw_generated_image(draw, slide, image_box):
+        image_box = (70, 184, 742, height - 158)
+        if not _draw_generated_image(
+            draw,
+            slide,
+            image_box,
+            motion_progress=local,
+            motion_style="pan_right" if int(shot.get("composition_variant") or 0) % 2 else "push_in",
+        ):
             _draw_scene_visual_fallback(draw, slide, image_box, reveal=reveal, fonts=fonts)
-        draw.rectangle((790, 176, 970, 180), fill=accent)
+        detail_x = 820
+        detail_y = 184
+        draw.rectangle((detail_x, detail_y, detail_x + 180, detail_y + 4), fill=accent)
         _draw_wrapped_text(
             draw,
             str(shot.get("focus_text") or ""),
-            (830, 188 + y_shift),
+            (detail_x, detail_y + 28 + y_shift),
             font=fonts["headline"],
-            width=360,
+            width=width - detail_x - 76,
             max_height=210,
             fill=fg,
             spacing=7,
@@ -3980,9 +4211,9 @@ def _draw_scene_composition(
         _draw_wrapped_text(
             draw,
             str(slide.get("visual_caption") or ""),
-            (832, 430),
+            (detail_x, 442),
             font=fonts["small"],
-            width=350,
+            width=width - detail_x - 76,
             max_height=62,
             fill=muted,
             spacing=4,
@@ -5618,6 +5849,29 @@ def run_video_pipeline(
     talker = build_talker_plan(subtitles)
 
     _progress("pipeline", "generate slide images", current=5, total=12)
+    paper_figures = extract_paper_figures(source, out_dir)
+    validate_paper_figures = os.environ.get("AUTO_VIDEO_PAPER_FIGURE_VALIDATE", "1").strip().lower() not in {"0", "false", "no", "off"}
+    assign_paper_figures(
+        slides,
+        paper_figures,
+        validate_with_vlm=bool(use_image_api and validate_paper_figures),
+    )
+    (out_dir / "paper_figure_assignments.json").write_text(
+        json.dumps(
+            [
+                {
+                    "slide_index": int(slide.get("index") or 0),
+                    "title": slide.get("title"),
+                    "paths": slide.get("paper_figure_paths") or [],
+                    "validation": slide.get("paper_figure_validation") or [],
+                }
+                for slide in slides
+            ],
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     image_generation = generate_slide_images(slides, out_dir, use_image_api=use_image_api)
 
     _progress("pipeline", "write storyboard artifacts", current=6, total=12)
@@ -5736,6 +5990,13 @@ def run_video_pipeline(
     total_duration = max((s["end_sec"] for s in subtitles), default=0)
     vlm_cursor_points = sum(1 for item in cursor_plan if item.get("grounding_mode") == "vlm")
     generated_image_count = sum(1 for item in image_generation if item.get("ok"))
+    paper_figure_count = sum(len(slide.get("paper_figure_paths") or []) for slide in slides)
+    unique_visual_assets = {
+        str(path)
+        for slide in slides
+        for path in (slide.get("visual_asset_paths") or [])
+        if str(path)
+    }
     metrics = {
         "judge_overall_score": judge["overall_score"],
         "target_score": target_score,
@@ -5789,10 +6050,13 @@ def run_video_pipeline(
         "image_api_requested": use_image_api,
         "image_model": os.environ.get("LUMID_IMAGE_MODEL") or os.environ.get("LUM_IMAGE_MODEL") or LUMID_IMAGE_MODEL,
         "generated_image_count": generated_image_count,
+        "generated_images_per_slide": int(os.environ.get("AUTO_VIDEO_IMAGES_PER_SLIDE", "2")),
+        "paper_figure_count": paper_figure_count,
+        "unique_visual_asset_count": len(unique_visual_assets),
         "image_generation_path": str(out_dir / "image_generation.json"),
         "video_rendered": video_rendered,
         "fps": fps,
-        "renderer_version": "scene_based_research_explainer_v1",
+        "renderer_version": "scene_based_research_explainer_v2",
         "render_style": os.environ.get("AUTO_VIDEO_RENDER_STYLE", "scene"),
         "visual_theme": source.get("visual_theme", "signal"),
         "vlm_cursor_requested": use_vlm_cursor,

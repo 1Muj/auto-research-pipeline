@@ -132,8 +132,11 @@ cd /Users/muj666/Desktop/auto
 AUTO_VIDEO_RENDER_STYLE=arbor ./scripts/run_video_with_eval.sh
 ```
 
-默认 `AUTO_VIDEO_IMAGE_MODE=image_only`：只有 `visual_kind=image` 的页会调用图像模型，
-流程图、表格、指标页优先用本地 renderer 画，避免 AI 图像生成出残缺截图或假 UI。
+默认 `AUTO_VIDEO_IMAGE_MODE=all` 且 `AUTO_VIDEO_IMAGES_PER_SLIDE=2`：每一页都会调用图像模型生成两个不同构图，镜头会轮换使用；PDF 中尺寸合适且与章节文本相关的原始图像也会提取到 `paper_figures/` 并穿插使用。流程图、表格和指标页仍保留本地可控动画，生成图主要用于机制特写与视觉转场。
+
+PDF 原图还会经过 Omni 相关性验证；其他论文封面、无关演示截图、装饰图标和不支持当前章节的图片会被拒绝。检查记录位于 `paper_figure_index.json` 与 `paper_figure_assignments.json`。
+
+这个默认设置会显著增加图像生成和验证调用次数，因此完整运行时间会比旧版更长；这是为了换取镜头级视觉差异，不再让多个镜头反复使用同一张图。
 
 如果想完全不用图像模型、全部用本地图表渲染：
 
@@ -146,7 +149,7 @@ AUTO_VIDEO_IMAGE_MODE=none ./scripts/run_video_with_eval.sh
 
 ```bash
 cd /Users/muj666/Desktop/auto
-AUTO_VIDEO_IMAGE_MODE=all ./scripts/run_video_with_eval.sh
+AUTO_VIDEO_IMAGE_MODE=all AUTO_VIDEO_IMAGES_PER_SLIDE=3 ./scripts/run_video_with_eval.sh
 ```
 
 如果是修复已有输出目录，默认 `TARGET_SLIDES=0` 表示自动决定；可以用正数强制页数：
