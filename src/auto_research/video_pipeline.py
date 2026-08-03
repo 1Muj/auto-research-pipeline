@@ -3527,23 +3527,32 @@ def _draw_generated_image(
         paste_x = max(0, (target[0] - image.size[0]) // 2)
         paste_y = max(0, (target[1] - image.size[1]) // 2)
         frame.paste(image, (paste_x, paste_y))
-        progress = max(0.0, min(1.0, motion_progress))
-        if motion_style != "static" and progress > 0:
-            zoom = 1.0 + 0.045 * progress
+        progress = _scene_ease(max(0.0, min(1.0, motion_progress)))
+        if motion_style != "static":
+            zoom = 1.025
             zoomed = frame.resize(
                 (max(target[0], int(target[0] * zoom)), max(target[1], int(target[1] * zoom))),
                 Image.Resampling.LANCZOS,
             )
             extra_x = max(0, zoomed.width - target[0])
             extra_y = max(0, zoomed.height - target[1])
+            center_x = extra_x / 2.0
+            center_y = extra_y / 2.0
+            travel_x = min(7.0, center_x)
+            travel_y = min(5.0, center_y)
             if motion_style == "pan_right":
-                crop_x = int(extra_x * progress)
+                crop_x = center_x - travel_x + 2.0 * travel_x * progress
             elif motion_style == "pan_left":
-                crop_x = int(extra_x * (1.0 - progress))
+                crop_x = center_x + travel_x - 2.0 * travel_x * progress
             else:
-                crop_x = extra_x // 2
-            crop_y = extra_y // 2
-            frame = zoomed.crop((crop_x, crop_y, crop_x + target[0], crop_y + target[1]))
+                crop_x = center_x
+            crop_y = center_y + travel_y - 2.0 * travel_y * progress if motion_style == "push_in" else center_y
+            frame = zoomed.transform(
+                target,
+                Image.Transform.AFFINE,
+                (1.0, 0.0, crop_x, 0.0, 1.0, crop_y),
+                resample=Image.Resampling.BICUBIC,
+            )
         canvas.paste(frame, (x1 + pad, y1 + pad))
         draw.rounded_rectangle(box, radius=10, outline=(35, 90, 130), width=2)
         return True
@@ -4073,7 +4082,13 @@ def _draw_scene_composition(
     animation_sec = max(0.001, float(shot.get("animation_sec") or duration * 0.34))
     animation_fraction = max(0.001, min(1.0, animation_sec / duration))
     reveal = _scene_ease(min(1.0, local / animation_fraction))
-    y_shift = int((1.0 - reveal) * 28)
+    entrance = str(shot.get("entrance") or "fade_up")
+    y_shift = int((1.0 - reveal) * 28) if entrance == "fade_up" else 0
+    drift_progress = (
+        0.0
+        if local <= animation_fraction
+        else (local - animation_fraction) / max(0.001, 1.0 - animation_fraction)
+    )
     shot_type = str(shot.get("shot_type") or "key_claim")
     accent = tuple(theme["accent"])
     fg = (244, 247, 251)
@@ -4165,13 +4180,12 @@ def _draw_scene_composition(
             spacing=7,
             max_lines=6,
         )
-        image_shift = int((1.0 - reveal) * 44)
-        image_box = (590 + image_shift, 180, width - 76 + image_shift, height - 174)
+        image_box = (590, 180, width - 76, height - 174)
         if not _draw_generated_image(
             draw,
             slide,
             image_box,
-            motion_progress=local,
+            motion_progress=drift_progress,
             motion_style="pan_left" if int(shot.get("composition_variant") or 0) % 2 else "push_in",
         ):
             _draw_scene_visual_fallback(draw, slide, image_box, reveal=reveal, fonts=fonts)
@@ -4190,7 +4204,7 @@ def _draw_scene_composition(
             draw,
             slide,
             image_box,
-            motion_progress=local,
+            motion_progress=drift_progress,
             motion_style="pan_right" if int(shot.get("composition_variant") or 0) % 2 else "push_in",
         ):
             _draw_scene_visual_fallback(draw, slide, image_box, reveal=reveal, fonts=fonts)
