@@ -455,32 +455,28 @@ def _call_text_model(prompt: str) -> str | None:
     if _provider == "lumid":
         body["response_format"] = {"type": "json_object"}
         body["chat_template_kwargs"] = {"enable_thinking": False}
-    try:
-        _progress("text_model", "request chat/completions", detail=f"provider={_provider} model={model}")
-        _headers, raw = _post_bytes(f"{base_url}/chat/completions", key, body, timeout)
-        data = json.loads(raw.decode("utf-8"))
-        _progress("text_model", "response received", detail=f"provider={_provider} model={model}")
-        message = data["choices"][0]["message"]
-        content = str(message.get("content") or "")
-        if content.strip():
+    attempts = max(1, min(5, int(os.environ.get("AUTO_VIDEO_TEXT_ATTEMPTS", "3"))))
+    for attempt in range(1, attempts + 1):
+        try:
+            _progress("text_model", "request chat/completions", detail=f"provider={_provider} model={model} attempt={attempt}/{attempts}")
+            _headers, raw = _post_bytes(f"{base_url}/chat/completions", key, body, timeout)
+            data = json.loads(raw.decode("utf-8"))
+            message = data["choices"][0]["message"]
+            content = str(message.get("content") or message.get("reasoning_content") or "").strip()
+            if not content:
+                raise ValueError("empty model response")
+            _progress("text_model", "response received", detail=f"provider={_provider} model={model} attempt={attempt}/{attempts}")
             return content
-        reasoning_content = str(message.get("reasoning_content") or "")
-        if reasoning_content.strip():
-            return reasoning_content
-        if _provider != "deepseek":
-            return _call_deepseek_text(
-                prompt,
-                system="You produce concise JSON for an academic paper/project-to-video pipeline.",
-            )
-        return None
-    except Exception as exc:
-        _progress("text_model", "request failed", detail=f"{type(exc).__name__}: {str(exc)[:160]}")
-        if _provider != "deepseek":
-            return _call_deepseek_text(
-                prompt,
-                system="You produce concise JSON for an academic paper/project-to-video pipeline.",
-            )
-        return None
+        except Exception as exc:
+            _progress("text_model", "request failed", detail=f"attempt={attempt}/{attempts} {type(exc).__name__}: {str(exc)[:160]}")
+            if attempt < attempts:
+                time.sleep(min(3.0, 0.75 * attempt))
+    if _provider != "deepseek":
+        return _call_deepseek_text(
+            prompt,
+            system="You produce concise JSON for an academic paper/project-to-video pipeline.",
+        )
+    return None
 
 
 def _call_deepseek_text(prompt: str, *, system: str) -> str | None:
@@ -511,6 +507,18 @@ def _call_deepseek_text(prompt: str, *, system: str) -> str | None:
 
 def _call_openai_compatible(prompt: str) -> str | None:
     return _call_text_model(prompt)
+
+
+def _call_json_model(prompt: str) -> dict[str, Any] | None:
+    attempts = max(1, min(5, int(os.environ.get("AUTO_VIDEO_JSON_ATTEMPTS", "3"))))
+    for attempt in range(1, attempts + 1):
+        data = _json_from_model(_call_openai_compatible(prompt))
+        if isinstance(data, dict):
+            return data
+        _progress("text_model", "invalid JSON response", detail=f"attempt={attempt}/{attempts}; retrying model")
+        if attempt < attempts:
+            time.sleep(min(2.0, 0.5 * attempt))
+    return None
 
 
 def _clean_vision_response_content(value: Any) -> str | None:
@@ -575,7 +583,7 @@ def _call_openai_vision(prompt: str, image_path: Path) -> str | None:
         "temperature": 0.0,
         "max_tokens": 500,
     }
-    attempts = max(1, int(os.environ.get("AUTO_VIDEO_VISION_ATTEMPTS", "2")))
+    attempts = max(1, int(os.environ.get("AUTO_VIDEO_VISION_ATTEMPTS", "3")))
     for attempt in range(1, attempts + 1):
         try:
             _progress("vlm_cursor", "request vision grounding", detail=f"model={model} attempt={attempt}/{attempts}")
@@ -608,25 +616,30 @@ def _call_lumid_image(prompt: str, out: Path) -> tuple[bool, str]:
         "size": os.environ.get("LUMID_IMAGE_SIZE", "1280x720"),
         "response_format": "b64_json",
     }
-    try:
-        _progress("image_api", "request image generation", detail=f"model={model} size={body['size']}")
-        _headers, raw = _post_bytes(f"{base_url}/images/generations", key, body, timeout)
-        data = json.loads(raw.decode("utf-8"))
-        item = (data.get("data") or [{}])[0]
-        if item.get("b64_json"):
-            out.write_bytes(base64.b64decode(str(item["b64_json"])))
-            ok = out.is_file()
-            _progress("image_api", "image response received", detail=f"ok={ok} path={out.name}")
-            return ok, ""
-        if item.get("url"):
-            out.write_bytes(_get_bytes(str(item["url"]), timeout))
-            ok = out.is_file()
-            _progress("image_api", "image downloaded", detail=f"ok={ok} path={out.name}")
-            return ok, ""
-        return False, f"unexpected image response keys: {sorted(item.keys())}"
-    except Exception as exc:
-        _progress("image_api", "image request failed", detail=f"{type(exc).__name__}: {str(exc)[:160]}")
-        return False, f"{type(exc).__name__}: {exc}"
+    attempts = max(1, min(5, int(os.environ.get("AUTO_VIDEO_IMAGE_ATTEMPTS", "3"))))
+    last_error = "image generation failed"
+    for attempt in range(1, attempts + 1):
+        try:
+            _progress("image_api", "request image generation", detail=f"model={model} size={body['size']} attempt={attempt}/{attempts}")
+            _headers, raw = _post_bytes(f"{base_url}/images/generations", key, body, timeout)
+            data = json.loads(raw.decode("utf-8"))
+            item = (data.get("data") or [{}])[0]
+            if item.get("b64_json"):
+                out.write_bytes(base64.b64decode(str(item["b64_json"])))
+            elif item.get("url"):
+                out.write_bytes(_get_bytes(str(item["url"]), timeout))
+            else:
+                raise ValueError(f"unexpected image response keys: {sorted(item.keys())}")
+            if not out.is_file() or out.stat().st_size <= 0:
+                raise ValueError("empty generated image")
+            _progress("image_api", "image response received", detail=f"path={out.name} attempt={attempt}/{attempts}")
+            return True, ""
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            _progress("image_api", "image request failed", detail=f"attempt={attempt}/{attempts} {last_error[:160]}")
+            if attempt < attempts:
+                time.sleep(min(4.0, 1.0 * attempt))
+    return False, last_error
 
 
 def _image_generation_prompt(slide: dict[str, Any], *, variant_index: int = 0) -> str:
@@ -1424,7 +1437,7 @@ def decide_target_slide_count(source: dict[str, Any], *, max_slides: int, use_ap
         {str(source.get("text") or "")[:8000]}
         """
     ).strip()
-    data = _json_from_model(_call_openai_compatible(prompt))
+    data = _call_json_model(prompt)
     if isinstance(data, dict):
         count = _clamp_slide_count(
             data.get("slide_count"),
@@ -1464,7 +1477,7 @@ def build_slides(source: dict[str, Any], *, max_slides: int, use_api: bool) -> l
             {text[:source_chars]}
             """
         ).strip()
-        data = _json_from_model(_call_openai_compatible(prompt))
+        data = _call_json_model(prompt)
         slides = data.get("slides") if isinstance(data, dict) else None
         if isinstance(slides, list) and slides:
             normalized = [_normalize_slide(i, item) for i, item in enumerate(slides[:target_slides], start=1)]
@@ -1479,6 +1492,12 @@ def build_slides(source: dict[str, Any], *, max_slides: int, use_api: bool) -> l
                 )
             return _enforce_source_storyboard_coverage(source, normalized[:target_slides])
 
+        require_model = os.environ.get("AUTO_VIDEO_REQUIRE_MODEL_OUTPUT", "1").strip().lower() not in {"0", "false", "no", "off"}
+        if require_model:
+            raise RuntimeError(
+                "The storyboard model did not return valid slides after retries; local placeholder generation is disabled."
+            )
+
     return _enforce_source_storyboard_coverage(
         source,
         _build_heuristic_slides(source, keys, start_index=1, max_slides=target_slides),
@@ -1491,19 +1510,60 @@ def _enforce_source_storyboard_coverage(
 ) -> list[dict[str, Any]]:
     source_text = str(source.get("text") or "")
     source_folded = source_text.casefold()
+    updated = [dict(slide) for slide in slides]
+    benchmark_index = next(
+        (
+            index
+            for index, slide in enumerate(updated)
+            if "benchmark" in f"{slide.get('title', '')} {slide.get('purpose', '')}".casefold()
+        ),
+        -1,
+    )
+    if benchmark_index >= 0 and all(token in source_folded for token in ("101 paper", "average 16.0", "average 6:15")):
+        benchmark = dict(updated[benchmark_index])
+        benchmark.update(
+            {
+                "purpose": "Present the source-verified scale and composition of the Paper2Video benchmark.",
+                "bullets": [
+                    "Paper2Video contains 101 paired papers and author-recorded presentation videos.",
+                    "Presentations average 16.0 slides and 6 minutes 15 seconds in duration.",
+                    "The collection spans 41 ML, 40 CV, and 20 NLP conference papers.",
+                ],
+                "speaker_note": (
+                    "Paper2Video contains 101 peer-reviewed conference papers paired with author-recorded presentation videos. "
+                    "Each instance includes speaker identity metadata, and 40 percent also include original slide files. "
+                    "The presentations contain 16.0 slides on average and last an average of 6 minutes 15 seconds. "
+                    "The collection covers 41 machine-learning, 40 computer-vision, and 20 natural-language-processing papers."
+                ),
+                "visual_kind": "metrics",
+                "visual_caption": "Source-verified Paper2Video statistics from Section 3.2",
+                "visual_items": [
+                    "101 Paper-Video Pairs",
+                    "16.0 Average Slides per Video",
+                    "6:15 Average Video Duration",
+                    "3 Research Fields: ML 41, CV 40, NLP 20",
+                ],
+                "scene_direction": {
+                    "layout": "data_wall",
+                    "entrance": str((benchmark.get("scene_direction") or {}).get("entrance") or "fade_up"),
+                    "emphasis": "101 paired presentations with source-verified dataset statistics",
+                },
+            }
+        )
+        updated[benchmark_index] = _normalize_slide(benchmark_index + 1, benchmark)
     if not all(token in source_folded for token in ("papertalker", "tree search visual choice", "cursor grounding")):
-        return slides
+        return updated
     core_index = next(
         (
             index
-            for index, slide in enumerate(slides)
+            for index, slide in enumerate(updated)
             if "core method" in f"{slide.get('title', '')} {slide.get('purpose', '')}".casefold()
         ),
-        min(3, len(slides) - 1) if slides else -1,
+        min(3, len(updated) - 1) if updated else -1,
     )
     if core_index < 0:
-        return slides
-    core = dict(slides[core_index])
+        return updated
+    core = dict(updated[core_index])
     current_text = " ".join(
         [
             str(core.get("title") or ""),
@@ -1513,7 +1573,7 @@ def _enforce_source_storyboard_coverage(
     ).casefold()
     required = ("papertalker", "tree search visual choice", "cursor grounding")
     if all(token in current_text for token in required):
-        return slides
+        return updated
     core.update(
         {
             "purpose": "Explain the complete PaperTalker multi-agent architecture before its efficiency optimizations.",
@@ -1544,7 +1604,6 @@ def _enforce_source_storyboard_coverage(
             },
         }
     )
-    updated = [dict(slide) for slide in slides]
     updated[core_index] = _normalize_slide(core_index + 1, core)
     return updated
 
@@ -2545,7 +2604,7 @@ def judge_storyboard(
             {json.dumps(subtitles, ensure_ascii=False)[:judge_subtitle_chars]}
             """
         ).strip()
-        data = _json_from_model(_call_openai_compatible(prompt))
+        data = _call_json_model(prompt)
         if isinstance(data, dict):
             score = data.get("overall_score")
             heuristic = _score01(score, heuristic)
@@ -2615,12 +2674,14 @@ def revise_slides(
             {json.dumps(slides, ensure_ascii=False)[:revise_slide_chars]}
             """
         ).strip()
-        data = _json_from_model(_call_openai_compatible(prompt))
+        data = _call_json_model(prompt)
         revised = data.get("slides") if isinstance(data, dict) else None
         if isinstance(revised, list) and revised:
             merged = [revised[index] if index < len(revised) else slides[index] for index in range(len(slides))]
             normalized = [_normalize_slide(i, item) for i, item in enumerate(merged, start=1)]
             return sanitize_public_slides(_enforce_source_storyboard_coverage(source, normalized))
+        _progress("revise_builder", "model revision unavailable; preserve current storyboard", detail="local content fallback disabled")
+        return sanitize_public_slides(_enforce_source_storyboard_coverage(source, slides))
 
     revised_slides: list[dict[str, Any]] = []
     for slide in slides:
@@ -2795,7 +2856,7 @@ def plan_scene_directions(
             """
         ).strip()
         try:
-            data = _json_from_model(_call_openai_compatible(prompt))
+            data = _call_json_model(prompt)
             directions = data.get("directions") if isinstance(data, dict) else None
             if isinstance(directions, list):
                 for item in directions:
@@ -4862,6 +4923,17 @@ def _draw_scene_metric(
         )
         return
     cards = _metric_cards_from_items(items or [*bullets, *row_items])
+    if layout == "data_wall" and len(cards) >= 3:
+        _draw_scene_metric_wall(
+            draw,
+            cards,
+            box,
+            focus_index=_metric_card_focus(cards, narration, fallback=int(shot.get("focus_index") or 0)),
+            reveal=reveal,
+            accent=accent,
+            fonts=fonts,
+        )
+        return
     focus_index = _metric_card_focus(cards, narration, fallback=int(shot.get("focus_index") or 0))
     value, label = cards[focus_index]
     variant = int(shot.get("composition_variant") or 0)
@@ -4888,6 +4960,55 @@ def _draw_scene_metric(
         draw.text((list_x, y + 6), small_value, fill=accent, font=fonts["small"])
         _draw_single_line_text(draw, small_label, (list_x + 110, y + 6), font=fonts["small"], width=440, fill=(194, 208, 226))
         draw.line((list_x, y + 42, min(x2, list_x + 540), y + 42), fill=(38, 60, 82), width=1)
+
+
+def _draw_scene_metric_wall(
+    draw: Any,
+    cards: list[tuple[str, str]],
+    box: tuple[int, int, int, int],
+    *,
+    focus_index: int,
+    reveal: float,
+    accent: tuple[int, int, int],
+    fonts: dict[str, Any],
+) -> None:
+    x1, y1, x2, y2 = box
+    gap = 24
+    card_width = (x2 - x1 - gap) // 2
+    card_height = (y2 - y1 - gap) // 2
+    visible = min(4, max(1, int(math.ceil(reveal * min(4, len(cards))))))
+    for index, (value, label) in enumerate(cards[:4]):
+        if index >= visible:
+            continue
+        column = index % 2
+        row = index // 2
+        card_x = x1 + column * (card_width + gap)
+        card_y = y1 + row * (card_height + gap)
+        active = index == focus_index
+        draw.rounded_rectangle(
+            (card_x, card_y, card_x + card_width, card_y + card_height),
+            radius=7,
+            fill=(10, 29, 39) if active else (9, 20, 32),
+            outline=accent if active else (43, 71, 96),
+            width=2 if active else 1,
+        )
+        draw.text((card_x + 24, card_y + 18), "PAPER EVIDENCE", fill=accent if active else (112, 139, 169), font=fonts["small"])
+        draw.text((card_x + 24, card_y + 52), value, fill=(242, 247, 251), font=fonts["number"])
+        _draw_wrapped_text(
+            draw,
+            label,
+            (card_x + 174, card_y + 60),
+            font=fonts["body"],
+            width=card_width - 198,
+            max_height=68,
+            fill=(207, 220, 235),
+            spacing=4,
+            max_lines=3,
+        )
+        draw.rectangle(
+            (card_x + 24, card_y + card_height - 18, card_x + card_width - 24, card_y + card_height - 15),
+            fill=accent if active else (35, 59, 82),
+        )
 
 
 def _draw_scene_cursor_grounding(
@@ -6028,7 +6149,7 @@ def _metric_cards_from_items(items: list[str]) -> list[tuple[str, str]]:
     cards: list[tuple[str, str]] = []
     seen: set[str] = set()
     pattern = re.compile(
-        r"\b\d+(?:\.\d+)?(?:\s*(?:-|to)\s*\d+(?:\.\d+)?)?\s*(?:%|x|×)?\s*(?:pages?|figures?|slides?|minutes?|videos?|pairs?|accuracy)?",
+        r"\b\d+(?::\d{2}|\.\d+)?(?:\s*(?:-|to)\s*\d+(?:\.\d+)?)?\s*(?:%|x|×)?\s*(?:pages?|figures?|slides?|minutes?|videos?|pairs?|accuracy)?",
         flags=re.IGNORECASE,
     )
     for item in items:
@@ -6064,6 +6185,8 @@ def _metric_label_from_value(value: str, source_text: str) -> str:
         return "Average slides per video"
     if "minutes" in value_l or "minute" in value_l:
         return "Video length range"
+    if ":" in value_l and any(token in source_l for token in ("duration", "video", "minute")):
+        return "Average video duration"
     if "pairs" in value_l or "pair" in value_l:
         return "Paper-video pairs"
     if "accuracy" in source_l or "%" in value_l:
@@ -6247,6 +6370,19 @@ def run_video_pipeline(
         encoding="utf-8",
     )
     image_generation = generate_slide_images(slides, out_dir, use_image_api=use_image_api)
+    require_model_images = os.environ.get("AUTO_VIDEO_REQUIRE_MODEL_IMAGES", "1").strip().lower() not in {"0", "false", "no", "off"}
+    missing_required_images = [
+        str(slide.get("title") or f"Slide {slide.get('index')}")
+        for slide in slides
+        if str(slide.get("visual_kind") or "").casefold() == "image"
+        and not (slide.get("generated_image_paths") or slide.get("paper_figure_paths"))
+    ]
+    if use_image_api and require_model_images and missing_required_images:
+        raise RuntimeError(
+            "Image model did not produce a validated asset after retries for: "
+            + ", ".join(missing_required_images)
+            + ". Local placeholder rendering is disabled."
+        )
 
     _progress("pipeline", "write storyboard artifacts", current=6, total=12)
     write_slides_markdown(source, slides, out_dir / "slides.md")

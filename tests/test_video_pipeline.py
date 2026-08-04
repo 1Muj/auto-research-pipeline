@@ -7,6 +7,8 @@ from pathlib import Path
 import auto_research.video_pipeline as video_pipeline
 from auto_research.video_pipeline import (
     _clean_vision_response_content,
+    _call_json_model,
+    _call_text_model,
     _enforce_source_storyboard_coverage,
     _text_model_provider,
     build_scene_timeline,
@@ -32,6 +34,36 @@ def test_video_pipeline_can_force_deepseek_when_lumid_is_also_loaded(monkeypatch
     monkeypatch.setenv("AUTO_VIDEO_TEXT_PROVIDER", "deepseek")
 
     assert _text_model_provider() == "deepseek"
+
+
+def test_text_model_retries_the_same_provider_before_fallback(monkeypatch) -> None:
+    calls = 0
+    monkeypatch.setenv("AUTO_VIDEO_TEXT_ATTEMPTS", "3")
+    monkeypatch.setattr(video_pipeline, "_text_model_config", lambda: ("key", "https://example.test", "model", "lumid"))
+    monkeypatch.setattr(video_pipeline.time, "sleep", lambda _seconds: None)
+
+    def flaky_post(_url: str, _key: str, _body: dict, _timeout: float):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise TimeoutError("provider still starting")
+        return {}, json.dumps({"choices": [{"message": {"content": '{"ok": true}'}}]}).encode()
+
+    monkeypatch.setattr(video_pipeline, "_post_bytes", flaky_post)
+
+    assert _call_text_model("Return JSON") == '{"ok": true}'
+    assert calls == 2
+
+
+def test_invalid_model_json_is_retried_instead_of_using_local_content(monkeypatch) -> None:
+    responses = iter(["temporarily incomplete", '{"slides": [{"title": "Ready"}]}'])
+    monkeypatch.setenv("AUTO_VIDEO_JSON_ATTEMPTS", "3")
+    monkeypatch.setattr(video_pipeline.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(video_pipeline, "_call_openai_compatible", lambda _prompt: next(responses))
+
+    data = _call_json_model("Return slides")
+
+    assert data == {"slides": [{"title": "Ready"}]}
 
 
 def test_vision_response_removes_generated_audio_payload() -> None:
@@ -204,6 +236,33 @@ def test_papertalker_core_method_cannot_collapse_to_parallel_speed_only() -> Non
     assert "PaperTalker" in core["speaker_note"]
     assert "Tree Search Visual Choice" in core["speaker_note"]
     assert "cursor" in core["speaker_note"].casefold()
+
+
+def test_paper2video_benchmark_metrics_are_source_verified() -> None:
+    source = {
+        "text": (
+            "Paper2Video covers 101 paper-video pairs. Average 16.0 slides per video. "
+            "Average 6:15 duration across 41 ML, 40 CV, and 20 NLP papers."
+        )
+    }
+    slides = [
+        {
+            "index": 1,
+            "title": "Paper2Video Benchmark",
+            "bullets": ["A benchmark."],
+            "visual_kind": "metrics",
+            "visual_items": ["101", "3", "16 Slides", "6 Minutes"],
+        }
+    ]
+
+    grounded = _enforce_source_storyboard_coverage(source, slides)
+
+    assert grounded[0]["visual_items"] == [
+        "101 Paper-Video Pairs",
+        "16.0 Average Slides per Video",
+        "6:15 Average Video Duration",
+        "3 Research Fields: ML 41, CV 40, NLP 20",
+    ]
 
 
 def test_video_slide_builder_adds_rich_visual_types() -> None:

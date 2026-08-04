@@ -188,6 +188,12 @@ def test_metric_parser_recognizes_speedup_factor() -> None:
     assert cards[0][0].lower() == "6x"
 
 
+def test_metric_parser_preserves_minute_second_duration() -> None:
+    cards = _metric_cards_from_items(["6:15 Average Video Duration"])
+
+    assert cards == [("6:15", "Average video duration")]
+
+
 def test_metric_card_focus_uses_named_method_over_generic_words() -> None:
     cards = _metric_cards_from_items(
         ["Sequential Generation Time", "PaperTalker Parallel Time", "6x Speedup Indicator"]
