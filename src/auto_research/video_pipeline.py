@@ -1054,7 +1054,7 @@ def synthesize_tts_segments(
         "path": "",
         "provider": "lumid-qwen-tts",
         "timing_mode": "segment_exact",
-        "speech_tempo": float(os.environ.get("AUTO_VIDEO_TTS_TEMPO", "0.90")),
+        "speech_tempo": float(os.environ.get("AUTO_VIDEO_TTS_TEMPO", "1.00")),
         "pre_speech_hold_sec": float(os.environ.get("AUTO_VIDEO_PRE_SPEECH_HOLD_SEC", "0.35")),
         "post_speech_hold_sec": float(os.environ.get("AUTO_VIDEO_POST_SPEECH_HOLD_SEC", "1.20")),
         "segments": [],
