@@ -121,7 +121,12 @@ def test_multi_beat_metric_scene_keeps_each_explanation_visual() -> None:
         if shot["slide_index"] == 6
     ]
 
-    assert [shot["shot_type"] for shot in timeline] == ["metric", "metric", "metric", "metric"]
+    assert [shot["shot_type"] for shot in timeline] == [
+        "data_landscape",
+        "data_focus",
+        "data_detail",
+        "data_conclusion",
+    ]
     assert [shot["focus_index"] for shot in timeline] == [0, 0, 1, 1]
 
 
@@ -158,7 +163,7 @@ def test_core_flow_starts_with_the_method_diagram_instead_of_an_empty_section_ca
 
     shots = [shot for shot in build_scene_timeline({"title": "Demo"}, slides, subtitles) if shot["slide_index"] == 2]
 
-    assert [shot["shot_type"] for shot in shots] == ["process", "process_focus", "process_focus", "synthesis"]
+    assert [shot["shot_type"] for shot in shots] == ["process_map", "process_trace", "process_trace", "synthesis"]
 
 
 def test_duplicate_placeholder_table_is_replaced_with_grounded_rows() -> None:
@@ -402,7 +407,7 @@ def test_scene_timeline_splits_slides_into_video_shots() -> None:
     assert timeline[0]["shot_type"] == "opener"
     assert timeline[0]["speech_start_sec"] == 0.3
     assert timeline[0]["speech_end_sec"] == 5.0
-    assert timeline[1]["shot_type"] == "process"
+    assert timeline[1]["shot_type"] == "process_map"
     assert timeline[-1]["shot_type"] == "synthesis"
     assert timeline[-1]["motion"] == "takeaway_stack"
     assert all(shot["end_sec"] > shot["start_sec"] for shot in timeline)
@@ -430,11 +435,39 @@ def test_four_beat_sections_use_distinct_video_compositions() -> None:
 
     assert [shot["shot_type"] for shot in timeline] == [
         "opener",
-        "process",
-        "process_focus",
+        "process_map",
+        "process_trace",
         "synthesis",
     ]
     assert len({shot["background_stage"] for shot in timeline}) >= 2
+
+
+def test_generated_media_uses_establishing_and_closeup_video_framing(tmp_path: Path) -> None:
+    visual = tmp_path / "visual.png"
+    Image.new("RGB", (1280, 720), "navy").save(visual)
+    slide = {
+        "index": 2,
+        "title": "System overview",
+        "purpose": "Explain the mechanism visually.",
+        "bullets": ["Problem", "Architecture", "Result", "Takeaway"],
+        "visual_kind": "image",
+        "visual_asset_paths": [str(visual), str(visual)],
+    }
+    subtitles = [
+        {"slide_index": 2, "start_sec": i * 6, "end_sec": (i + 1) * 6, "text": f"Beat {i + 1}."}
+        for i in range(4)
+    ]
+
+    shots = build_scene_timeline({"title": "Demo"}, [slide], subtitles)
+
+    assert [shot["shot_type"] for shot in shots] == [
+        "media_establish",
+        "media_detail",
+        "key_claim",
+        "synthesis",
+    ]
+    assert [shot["framing"] for shot in shots[:2]] == ["full_frame", "close_up"]
+    assert all(shot["background_stage"] == "immersive" for shot in shots[:2])
 
 
 def test_long_single_narration_can_split_without_short_shots() -> None:

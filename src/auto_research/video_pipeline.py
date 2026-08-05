@@ -2014,16 +2014,16 @@ def _scene_shot_sequence(
     if beat_count <= 0:
         return []
     primary = {
-        "flow": "process",
-        "table": "evidence",
-        "metrics": "metric",
-        "image": "image_focus" if has_generated_image else "key_claim",
+        "flow": "process_map",
+        "table": "evidence_board",
+        "metrics": "data_landscape",
+        "image": "media_establish" if has_generated_image else "key_claim",
     }.get(visual_kind, "key_claim")
     detail = {
-        "flow": "detail_focus" if has_generated_image else "process_focus",
-        "table": "detail_focus" if has_generated_image else "evidence_focus",
-        "metrics": "detail_focus" if has_generated_image else "metric",
-        "image": "detail_focus" if has_generated_image else "contrast",
+        "flow": "process_trace",
+        "table": "evidence_closeup",
+        "metrics": "data_focus",
+        "image": "media_detail" if has_generated_image else "contrast",
     }.get(visual_kind, "contrast")
 
     if beat_count == 1:
@@ -2032,20 +2032,25 @@ def _scene_shot_sequence(
         first = "opener" if slide_position == 1 else primary
         return [first, "synthesis"]
     if visual_kind == "metrics" and beat_count >= 3:
-        sequence = ["metric"] * beat_count
+        middle = ["data_focus", "data_detail"][: max(0, beat_count - 2)]
+        sequence = ["data_landscape", *middle, "data_conclusion"]
         if slide_position == 1:
             sequence[0] = "opener"
         return sequence
     if visual_kind == "flow" and beat_count >= 3:
-        sequence = ["process", *(["process_focus"] * (beat_count - 2)), "synthesis"]
+        sequence = ["process_map", *(["process_trace"] * (beat_count - 2)), "synthesis"]
         if slide_position == 1:
             sequence[0] = "opener"
-            sequence[1] = "process"
+            sequence[1] = "process_map"
         return sequence
     if beat_count == 3:
+        if visual_kind == "image" and has_generated_image:
+            return ["media_establish", "media_detail", "synthesis"]
         first = "opener" if slide_position == 1 else "section_title"
         return [first, primary, "synthesis"]
 
+    if visual_kind == "image" and has_generated_image:
+        return ["media_establish", "media_detail", "key_claim", "synthesis"][:beat_count]
     first = "opener" if slide_position == 1 else "section_title"
     sequence = [first, primary, detail]
     while len(sequence) < beat_count - 1:
@@ -2276,7 +2281,7 @@ def build_scene_timeline(
             base_entrance_index = SCENE_ENTRANCES.index(scene_direction["entrance"])
             entrance = SCENE_ENTRANCES[(base_entrance_index + beat_index) % len(SCENE_ENTRANCES)]
             visual_asset_path = ""
-            if shot_type in {"image_focus", "detail_focus"} and visual_asset_paths:
+            if shot_type in {"image_focus", "detail_focus", "media_establish", "media_detail"} and visual_asset_paths:
                 visual_asset_path = visual_asset_paths[asset_cursor % len(visual_asset_paths)]
                 asset_cursor += 1
             timeline.append(
@@ -2292,6 +2297,31 @@ def build_scene_timeline(
                     "animation_sec": round(animation_sec, 3),
                     "hold_sec": round(hold_sec, 3),
                     "shot_type": shot_type,
+                    "scene_family": {
+                        "media_establish": "documentary_media",
+                        "media_detail": "documentary_media",
+                        "process_map": "mechanism_stage",
+                        "process_trace": "mechanism_stage",
+                        "evidence_board": "evidence_stage",
+                        "evidence_closeup": "evidence_stage",
+                        "data_landscape": "data_stage",
+                        "data_focus": "data_stage",
+                        "data_detail": "data_stage",
+                        "data_conclusion": "data_stage",
+                        "synthesis": "summary_stage",
+                    }.get(shot_type, "narrative_stage"),
+                    "framing": {
+                        "media_establish": "full_frame",
+                        "media_detail": "close_up",
+                        "process_map": "wide",
+                        "process_trace": "guided_close_up",
+                        "evidence_board": "wide",
+                        "evidence_closeup": "close_up",
+                        "data_landscape": "wide",
+                        "data_focus": "close_up",
+                        "data_detail": "detail",
+                        "data_conclusion": "result_frame",
+                    }.get(shot_type, "medium"),
                     "headline": _clean_display_text(slide.get("title")),
                     "section_label": _clean_display_text(slide.get("purpose")) or f"Part {slide_index}",
                     "narration": _clean_display_text(beat.get("text")),
@@ -2312,11 +2342,21 @@ def build_scene_timeline(
                         "contrast": "split",
                         "image_focus": "media",
                         "detail_focus": "media",
+                        "media_establish": "immersive",
+                        "media_detail": "immersive",
                         "process": "technical",
                         "process_focus": "quiet",
+                        "process_map": "technical",
+                        "process_trace": "quiet",
                         "evidence": "technical",
                         "evidence_focus": "quiet",
+                        "evidence_board": "technical",
+                        "evidence_closeup": "quiet",
                         "metric": "spotlight",
+                        "data_landscape": "spotlight",
+                        "data_focus": "quiet",
+                        "data_detail": "technical",
+                        "data_conclusion": "split",
                         "synthesis": "quiet",
                     }.get(shot_type, "technical"),
                     "transition": "fade" if is_first else "continue",
@@ -2330,6 +2370,16 @@ def build_scene_timeline(
                         "metric": "number_focus",
                         "image_focus": "image_settle",
                         "detail_focus": "detail_pan",
+                        "media_establish": "documentary_establish",
+                        "media_detail": "evidence_closeup",
+                        "process_map": "path_build",
+                        "process_trace": "camera_trace",
+                        "evidence_board": "evidence_scan",
+                        "evidence_closeup": "row_closeup",
+                        "data_landscape": "data_establish",
+                        "data_focus": "number_closeup",
+                        "data_detail": "chart_scan",
+                        "data_conclusion": "result_lockup",
                         "contrast": "split_compare",
                         "synthesis": "takeaway_stack",
                         "key_claim": "statement_reveal",
@@ -4339,6 +4389,9 @@ def _draw_scene_background(
     elif stage == "media":
         draw.line((0, 94, width, 94), fill=line, width=1)
         draw.line((0, height - 154, width, height - 154), fill=line, width=1)
+    elif stage == "immersive":
+        # The visual itself becomes the set; avoid decorative slide chrome.
+        draw.rectangle((0, 0, width, height), fill=_scene_color(background, -3))
 
 
 def _draw_scene_progress(
@@ -4366,6 +4419,8 @@ def _draw_scene_progress(
             width=196,
             fill=muted,
         )
+        return
+    if shot_type in {"media_establish", "media_detail", "process_trace"}:
         return
     label = str(shot.get("section_label") or shot.get("headline") or "Research")
     _draw_single_line_text(draw, label.upper(), (64, 42), font=font, width=760, fill=accent)
@@ -4506,9 +4561,34 @@ def _draw_scene_composition(
         return
 
     headline = str(shot.get("headline") or "")
-    _draw_single_line_text(draw, headline, (76, 112 + y_shift), font=fonts["headline"], width=1128, fill=fg)
+    if shot_type not in {"media_establish", "media_detail", "process_trace"}:
+        _draw_single_line_text(draw, headline, (76, 112 + y_shift), font=fonts["headline"], width=1128, fill=fg)
 
-    if shot_type == "image_focus":
+    if shot_type == "media_establish":
+        _draw_scene_media_establish(
+            draw,
+            slide,
+            shot,
+            width=width,
+            height=height,
+            reveal=reveal,
+            drift_progress=drift_progress,
+            accent=accent,
+            fonts=fonts,
+        )
+    elif shot_type == "media_detail":
+        _draw_scene_media_detail(
+            draw,
+            slide,
+            shot,
+            width=width,
+            height=height,
+            reveal=reveal,
+            drift_progress=drift_progress,
+            accent=accent,
+            fonts=fonts,
+        )
+    elif shot_type == "image_focus":
         _draw_wrapped_text(
             draw,
             str(shot.get("focus_text") or ""),
@@ -4573,15 +4653,17 @@ def _draw_scene_composition(
             spacing=4,
             max_lines=3,
         )
-    elif shot_type == "process":
+    elif shot_type in {"process", "process_map"}:
         _draw_scene_process(draw, slide, (76, 205, width - 76, 500), reveal=reveal, accent=accent, fonts=fonts)
+    elif shot_type == "process_trace":
+        _draw_scene_process_trace(draw, slide, shot, (48, 70, width - 48, height - 150), reveal=reveal, accent=accent, fonts=fonts)
     elif shot_type == "process_focus":
         _draw_scene_process_focus(draw, slide, shot, (92, 172, width - 92, 514), reveal=reveal, accent=accent, fonts=fonts)
-    elif shot_type == "evidence":
+    elif shot_type in {"evidence", "evidence_board"}:
         _draw_scene_evidence(draw, slide, (92, 190, width - 92, 510), reveal=reveal, fonts=fonts)
-    elif shot_type == "evidence_focus":
+    elif shot_type in {"evidence_focus", "evidence_closeup"}:
         _draw_scene_evidence_focus(draw, slide, shot, (92, 178, width - 92, 510), reveal=reveal, accent=accent, fonts=fonts)
-    elif shot_type == "metric":
+    elif shot_type in {"metric", "data_landscape", "data_focus", "data_detail", "data_conclusion"}:
         _draw_scene_metric(draw, slide, shot, (76, 182, width - 76, 510), reveal=reveal, accent=accent, fonts=fonts)
     elif shot_type == "contrast":
         _draw_scene_contrast(draw, slide, shot, (76, 174, width - 76, 510), reveal=reveal, accent=accent, fonts=fonts)
@@ -4608,6 +4690,107 @@ def _draw_scene_composition(
             (846, 176 + y_shift, width - 76, 490),
             accent=accent,
             fonts=fonts,
+        )
+
+
+def _draw_scene_media_establish(
+    draw: Any,
+    slide: dict[str, Any],
+    shot: dict[str, Any],
+    *,
+    width: int,
+    height: int,
+    reveal: float,
+    drift_progress: float,
+    accent: tuple[int, int, int],
+    fonts: dict[str, Any],
+) -> None:
+    """Use a paper figure or generated visual as the scene, not as a slide widget."""
+    media_box = (24, 18, width - 24, height - 142)
+    if not _draw_generated_image(
+        draw,
+        slide,
+        media_box,
+        motion_progress=drift_progress,
+        motion_style="push_in",
+    ):
+        _draw_scene_visual_fallback(draw, slide, (72, 120, width - 72, height - 170), reveal=reveal, fonts=fonts)
+        return
+
+    panel_width = min(610, width - 152)
+    panel_y = 62 + int((1.0 - reveal) * 22)
+    draw.rounded_rectangle(
+        (64, panel_y, 64 + panel_width, panel_y + 150),
+        radius=6,
+        fill=(4, 12, 22, 224),
+        outline=(*accent, 210),
+        width=2,
+    )
+    draw.text((88, panel_y + 18), "VISUAL EVIDENCE", fill=accent, font=fonts["small"])
+    _draw_wrapped_text(
+        draw,
+        str(shot.get("focus_text") or shot.get("headline") or ""),
+        (88, panel_y + 52),
+        font=fonts["body"],
+        width=panel_width - 48,
+        max_height=78,
+        fill=(245, 248, 252),
+        spacing=5,
+        max_lines=3,
+    )
+
+
+def _draw_scene_media_detail(
+    draw: Any,
+    slide: dict[str, Any],
+    shot: dict[str, Any],
+    *,
+    width: int,
+    height: int,
+    reveal: float,
+    drift_progress: float,
+    accent: tuple[int, int, int],
+    fonts: dict[str, Any],
+) -> None:
+    """Cut from the establishing image to an evidence-led close-up composition."""
+    variant = int(shot.get("composition_variant") or 0)
+    media_left = bool(variant % 2)
+    media_box = (28, 28, 850, height - 146) if media_left else (width - 850, 28, width - 28, height - 146)
+    text_x = 904 if media_left else 64
+    text_width = width - text_x - 64 if media_left else width - 850 - 108
+    if not _draw_generated_image(
+        draw,
+        slide,
+        media_box,
+        motion_progress=drift_progress,
+        motion_style="pan_right" if media_left else "pan_left",
+    ):
+        _draw_scene_visual_fallback(draw, slide, media_box, reveal=reveal, fonts=fonts)
+    draw.text((text_x, 98), "EVIDENCE CLOSE-UP", fill=accent, font=fonts["small"])
+    draw.rectangle((text_x, 132, text_x + int(text_width * reveal), 136), fill=accent)
+    _draw_wrapped_text(
+        draw,
+        str(shot.get("focus_text") or ""),
+        (text_x, 170),
+        font=fonts["headline"],
+        width=text_width,
+        max_height=190,
+        fill=(244, 247, 251),
+        spacing=7,
+        max_lines=5,
+    )
+    caption = _clean_display_text(slide.get("visual_caption") or slide.get("purpose") or "")
+    if caption:
+        _draw_wrapped_text(
+            draw,
+            caption,
+            (text_x, 392),
+            font=fonts["small"],
+            width=text_width,
+            max_height=76,
+            fill=(158, 178, 203),
+            spacing=4,
+            max_lines=3,
         )
 
 
@@ -4801,6 +4984,81 @@ def _draw_scene_process_focus(
     )
 
 
+def _draw_scene_process_trace(
+    draw: Any,
+    slide: dict[str, Any],
+    shot: dict[str, Any],
+    box: tuple[int, int, int, int],
+    *,
+    reveal: float,
+    accent: tuple[int, int, int],
+    fonts: dict[str, Any],
+) -> None:
+    """Stage one mechanism node as a camera close-up instead of redrawing a slide."""
+    x1, y1, x2, y2 = box
+    items = [_clean_visual_item(str(item)) for item in (slide.get("visual_items") or slide.get("bullets") or [])[:5]]
+    if not items:
+        items = ["Input", "Reason", "Generate", "Evaluate"]
+    focus = min(int(shot.get("focus_index") or 0), len(items) - 1)
+    previous = items[focus - 1] if focus > 0 else "SOURCE"
+    current = items[focus]
+    following = items[focus + 1] if focus + 1 < len(items) else "OUTCOME"
+    detail = _scene_item_detail(slide, current)
+
+    draw.text((x1 + 18, y1 + 4), f"MECHANISM  {focus + 1:02d} / {len(items):02d}", fill=accent, font=fonts["small"])
+    track_y = y1 + 54
+    draw.rectangle((x1 + 18, track_y, x2 - 18, track_y + 3), fill=(40, 65, 88))
+    draw.rectangle((x1 + 18, track_y, x1 + 18 + int((x2 - x1 - 36) * (focus + reveal) / len(items)), track_y + 4), fill=accent)
+
+    center_x = (x1 + x2) // 2
+    center_y = y1 + 218
+    ghost_w, ghost_h = 250, 104
+    for ghost_x, label, side in ((x1 + 18, previous, -1), (x2 - ghost_w - 18, following, 1)):
+        draw.rounded_rectangle(
+            (ghost_x, center_y - ghost_h // 2, ghost_x + ghost_w, center_y + ghost_h // 2),
+            radius=8,
+            fill=(8, 18, 29),
+            outline=(45, 70, 94),
+            width=1,
+        )
+        _draw_wrapped_text(
+            draw,
+            label,
+            (ghost_x + 20, center_y - 28),
+            font=fonts["small"],
+            width=ghost_w - 40,
+            max_height=60,
+            fill=(125, 145, 169),
+            spacing=3,
+            max_lines=2,
+        )
+        arrow_start = ghost_x + ghost_w if side < 0 else center_x + 242
+        arrow_end = center_x - 242 if side < 0 else ghost_x
+        draw.line((arrow_start, center_y, arrow_end, center_y), fill=accent, width=3)
+        if side < 0:
+            draw.polygon([(arrow_end - 10, center_y - 7), (arrow_end, center_y), (arrow_end - 10, center_y + 7)], fill=accent)
+        else:
+            draw.polygon([(arrow_end - 10, center_y - 7), (arrow_end, center_y), (arrow_end - 10, center_y + 7)], fill=accent)
+
+    rise = int((1.0 - reveal) * 20)
+    focus_box = (center_x - 224, center_y - 104 + rise, center_x + 224, center_y + 104 + rise)
+    draw.rounded_rectangle(focus_box, radius=10, fill=(8, 31, 39), outline=accent, width=3)
+    draw.text((focus_box[0] + 28, focus_box[1] + 22), "CURRENT STAGE", fill=accent, font=fonts["small"])
+    _draw_wrapped_text(
+        draw,
+        current,
+        (focus_box[0] + 28, focus_box[1] + 64),
+        font=fonts["headline"],
+        width=focus_box[2] - focus_box[0] - 56,
+        max_height=112,
+        fill=(244, 248, 252),
+        spacing=6,
+        max_lines=3,
+    )
+    draw.text((x1 + 18, y2 - 92), "WHY THIS STAGE MATTERS", fill=accent, font=fonts["small"])
+    _draw_single_line_text(draw, detail, (x1 + 18, y2 - 54), font=fonts["body"], width=x2 - x1 - 36, fill=(202, 216, 232))
+
+
 def _scene_item_detail(slide: dict[str, Any], item: str) -> str:
     label = _clean_display_text(item).split(":", 1)[0].strip()
     note = _clean_display_text(slide.get("speaker_note") or "")
@@ -4874,6 +5132,7 @@ def _draw_scene_metric(
         else []
     )
     narration = _clean_display_text(shot.get("narration") or "")
+    shot_type = str(shot.get("shot_type") or "metric")
     layout = str(shot.get("layout_variant") or "data_wall")
     focus_index = min(int(shot.get("focus_index") or 0), max(0, len(bullets) - 1))
     focus_text = " ".join([narration, bullets[focus_index] if bullets else ""]).casefold()
@@ -4923,7 +5182,7 @@ def _draw_scene_metric(
         )
         return
     cards = _metric_cards_from_items(items or [*bullets, *row_items])
-    if layout == "data_wall" and len(cards) >= 3:
+    if layout == "data_wall" and len(cards) >= 3 and shot_type in {"metric", "data_landscape"}:
         _draw_scene_metric_wall(
             draw,
             cards,
