@@ -450,7 +450,7 @@ def _call_text_model(prompt: str) -> str | None:
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.2,
-        "max_tokens": int(os.environ.get("AUTO_VIDEO_TEXT_MAX_TOKENS", "2500")),
+        "max_tokens": int(os.environ.get("AUTO_VIDEO_TEXT_MAX_TOKENS", "6000")),
     }
     if _provider == "lumid":
         body["response_format"] = {"type": "json_object"}
@@ -461,11 +461,26 @@ def _call_text_model(prompt: str) -> str | None:
             _progress("text_model", "request chat/completions", detail=f"provider={_provider} model={model} attempt={attempt}/{attempts}")
             _headers, raw = _post_bytes(f"{base_url}/chat/completions", key, body, timeout)
             data = json.loads(raw.decode("utf-8"))
-            message = data["choices"][0]["message"]
+            choice = data["choices"][0]
+            message = choice["message"]
             content = str(message.get("content") or message.get("reasoning_content") or "").strip()
             if not content:
                 raise ValueError("empty model response")
-            _progress("text_model", "response received", detail=f"provider={_provider} model={model} attempt={attempt}/{attempts}")
+            finish_reason = str(choice.get("finish_reason") or "")
+            usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+            _progress(
+                "text_model",
+                "response received",
+                detail=(
+                    f"provider={_provider} model={model} attempt={attempt}/{attempts} "
+                    f"finish={finish_reason or 'unknown'} chars={len(content)} "
+                    f"completion_tokens={usage.get('completion_tokens', 'unknown')}"
+                ),
+            )
+            if finish_reason == "length":
+                raise ValueError(
+                    f"model output reached max_tokens={body['max_tokens']} before completing JSON"
+                )
             return content
         except Exception as exc:
             _progress("text_model", "request failed", detail=f"attempt={attempt}/{attempts} {type(exc).__name__}: {str(exc)[:160]}")
@@ -1361,11 +1376,21 @@ def align_cursor_plan_to_subtitles(
 def _json_from_model(text: str | None) -> dict[str, Any] | None:
     if not text:
         return None
-    match = re.search(r"\{.*\}", text, flags=re.S)
-    if not match:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.I)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    try:
+        parsed = json.loads(cleaned)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        pass
+    start = cleaned.find("{")
+    if start < 0:
         return None
     try:
-        return json.loads(match.group(0))
+        parsed, _end = json.JSONDecoder().raw_decode(cleaned[start:])
+        return parsed if isinstance(parsed, dict) else None
     except json.JSONDecodeError:
         return None
 

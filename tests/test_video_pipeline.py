@@ -55,6 +55,40 @@ def test_text_model_retries_the_same_provider_before_fallback(monkeypatch) -> No
     assert calls == 2
 
 
+def test_text_model_retries_when_json_was_truncated_by_token_limit(monkeypatch) -> None:
+    calls = 0
+    monkeypatch.setenv("AUTO_VIDEO_TEXT_ATTEMPTS", "2")
+    monkeypatch.setenv("AUTO_VIDEO_TEXT_MAX_TOKENS", "6000")
+    monkeypatch.setattr(video_pipeline, "_text_model_config", lambda: ("key", "https://example.test", "model", "lumid"))
+    monkeypatch.setattr(video_pipeline.time, "sleep", lambda _seconds: None)
+
+    def truncated_then_complete(_url: str, _key: str, body: dict, _timeout: float):
+        nonlocal calls
+        calls += 1
+        assert body["max_tokens"] == 6000
+        if calls == 1:
+            response = {
+                "choices": [{"finish_reason": "length", "message": {"content": '{"slides": ['}}],
+                "usage": {"completion_tokens": 6000},
+            }
+        else:
+            response = {
+                "choices": [{"finish_reason": "stop", "message": {"content": '{"slides": []}'}}],
+                "usage": {"completion_tokens": 8},
+            }
+        return {}, json.dumps(response).encode()
+
+    monkeypatch.setattr(video_pipeline, "_post_bytes", truncated_then_complete)
+
+    assert _call_text_model("Return JSON") == '{"slides": []}'
+    assert calls == 2
+
+
+def test_json_parser_accepts_fenced_json_and_ignores_trailing_text() -> None:
+    assert video_pipeline._json_from_model('```json\n{"ok": true}\n```') == {"ok": True}
+    assert video_pipeline._json_from_model('Result:\n{"ok": true}\nDone.') == {"ok": True}
+
+
 def test_invalid_model_json_is_retried_instead_of_using_local_content(monkeypatch) -> None:
     responses = iter(["temporarily incomplete", '{"slides": [{"title": "Ready"}]}'])
     monkeypatch.setenv("AUTO_VIDEO_JSON_ATTEMPTS", "3")
