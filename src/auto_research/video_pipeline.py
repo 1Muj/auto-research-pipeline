@@ -2170,6 +2170,100 @@ def _scene_shot_sequence(
     return sequence[:beat_count]
 
 
+SHOT_VISUAL_STRATEGIES = {
+    "generated_scene",
+    "paper_figure",
+    "procedural_diagram",
+    "procedural_chart",
+    "evidence_table",
+    "split_comparison",
+    "kinetic_text",
+}
+
+
+def _route_shot_visual_strategy(
+    narration: str,
+    slide: dict[str, Any],
+    *,
+    beat_index: int,
+    generated_assets: list[str],
+    paper_assets: list[str],
+) -> tuple[str, str]:
+    """Choose an evidence-aware visual treatment for one narration beat."""
+    visual_kind = str(slide.get("visual_kind") or "image").casefold()
+    text = " ".join(
+        [
+            _clean_display_text(slide.get("title")),
+            _clean_display_text(slide.get("purpose")),
+            _clean_display_text(narration),
+        ]
+    ).casefold()
+    narration_l = _clean_display_text(narration).casefold()
+    has_metric_number = bool(
+        re.search(
+            r"\b\d+(?:\.\d+)?\s*(?:%|x|×|times?|pairs?|videos?|slides?|minutes?|seconds?|points?)\b|\b\d+:\d{2}\b",
+            narration_l,
+        )
+    )
+    chart_terms = (
+        "score", "metric", "result", "accuracy", "speedup", "faster", "benchmark",
+        "average", "percent", "dataset size", "pairs", "minutes", "performance",
+    )
+    process_terms = (
+        "pipeline", "workflow", "architecture", "agent", "module", "stage", "step",
+        "tree search", "branch", "parallel", "synchron", "grounding", "generate",
+        "first", "then", "finally",
+    )
+    comparison_terms = (
+        "versus", " vs ", "compared with", "compared to", "unlike", "whereas",
+        "before", "after", "challenge", "gap", "limitation",
+    )
+    evidence_terms = ("evidence", "dataset", "example", "study", "evaluation", "table")
+
+    if has_metric_number or visual_kind == "metrics" or any(term in narration_l for term in chart_terms):
+        return "procedural_chart", "The narration contains a measurable result or statistic."
+    if visual_kind == "flow" or any(term in narration_l for term in process_terms):
+        return "procedural_diagram", "The narration explains an ordered mechanism or relationship."
+    if any(term in narration_l for term in comparison_terms):
+        return "split_comparison", "The narration contrasts two states or approaches."
+    meaningful_table = _visual_table_is_meaningful(slide.get("visual_table") or [])
+    if visual_kind == "table" or (meaningful_table and any(term in narration_l for term in evidence_terms)):
+        return "evidence_table", "The narration is best supported by structured evidence."
+    if paper_assets and any(term in text for term in ("figure", "method", "result", "architecture", "example")):
+        return "paper_figure", "A validated source-paper figure directly supports this beat."
+    if generated_assets and visual_kind == "image" and beat_index < 2:
+        return "generated_scene", "A validated generated scene is available for this conceptual beat."
+    if meaningful_table and beat_index > 0:
+        return "evidence_table", "The slide contains structured evidence for this supporting beat."
+    return "kinetic_text", "No trustworthy external visual is required; emphasize the grounded claim."
+
+
+def _shot_type_for_visual_strategy(
+    strategy: str,
+    *,
+    strategy_occurrence: int,
+    beat_index: int,
+    beat_count: int,
+) -> str:
+    if strategy in {"generated_scene", "paper_figure"}:
+        return "media_establish" if strategy_occurrence == 0 else "media_detail"
+    if strategy == "procedural_diagram":
+        if beat_count >= 2 and beat_index == beat_count - 1:
+            return "synthesis"
+        return "process_map" if strategy_occurrence == 0 else "process_trace"
+    if strategy == "procedural_chart":
+        if strategy_occurrence == 0:
+            return "data_landscape"
+        if beat_index == beat_count - 1:
+            return "data_conclusion"
+        return "data_focus" if strategy_occurrence == 1 else "data_detail"
+    if strategy == "evidence_table":
+        return "evidence_board" if strategy_occurrence == 0 else "evidence_closeup"
+    if strategy == "split_comparison":
+        return "contrast"
+    return "synthesis" if beat_count > 1 and beat_index == beat_count - 1 else "key_claim"
+
+
 def _scene_focus_index(
     narration: str,
     *,
@@ -2285,9 +2379,15 @@ def build_scene_timeline(
                 "focus_text": _clean_display_text(source.get("authors")),
                 "focus_index": 0,
                 "visual_kind": "title",
+                "visual_strategy": "kinetic_text",
+                "visual_strategy_reason": "Introduce the paper before narration begins.",
+                "asset_source": "renderer",
+                "asset_status": "structured",
+                "fallback_strategy": "kinetic_text",
+                "repair_target": "none",
                 "has_generated_image": False,
                 "visual_asset_path": "",
-                "visual_asset_kind": "none",
+                "visual_asset_kind": "renderer",
                 "composition_variant": 0,
                 "layout_variant": "editorial",
                 "entrance": "fade_up",
@@ -2349,22 +2449,34 @@ def build_scene_timeline(
             for path in (slide.get("visual_asset_paths") or [slide.get("generated_image_path")])
             if str(path) and Path(str(path)).is_file()
         ]
-        has_generated_image = bool(visual_asset_paths)
-        shot_sequence = _scene_shot_sequence(
-            visual_kind=visual_kind,
-            beat_count=len(beats),
-            slide_position=slide_position,
-            has_generated_image=has_generated_image,
-        )
-        asset_cursor = 0
+        paper_assets = [path for path in visual_asset_paths if "paper_figures" in path]
+        generated_assets = [path for path in visual_asset_paths if path not in paper_assets]
+        has_generated_image = bool(generated_assets)
+        strategy_counts: dict[str, int] = {}
+        generated_cursor = 0
+        paper_cursor = 0
         previous_focus_index: int | None = None
         for beat_index, beat in enumerate(beats):
             start = float(beat.get("start_sec") or 0)
             end = max(start + 1.0, float(beat.get("end_sec") or start + 5.0))
             is_first = beat_index == 0
-            shot_type = shot_sequence[beat_index]
 
             narration = str(beat.get("text") or "")
+            visual_strategy, strategy_reason = _route_shot_visual_strategy(
+                narration,
+                slide,
+                beat_index=beat_index,
+                generated_assets=generated_assets,
+                paper_assets=paper_assets,
+            )
+            strategy_occurrence = strategy_counts.get(visual_strategy, 0)
+            strategy_counts[visual_strategy] = strategy_occurrence + 1
+            shot_type = _shot_type_for_visual_strategy(
+                visual_strategy,
+                strategy_occurrence=strategy_occurrence,
+                beat_index=beat_index,
+                beat_count=len(beats),
+            )
             focus_fallback = (
                 previous_focus_index
                 if previous_focus_index is not None and _scene_narration_is_anaphoric(narration)
@@ -2392,9 +2504,26 @@ def build_scene_timeline(
             base_entrance_index = SCENE_ENTRANCES.index(scene_direction["entrance"])
             entrance = SCENE_ENTRANCES[(base_entrance_index + beat_index) % len(SCENE_ENTRANCES)]
             visual_asset_path = ""
-            if shot_type in {"image_focus", "detail_focus", "media_establish", "media_detail"} and visual_asset_paths:
-                visual_asset_path = visual_asset_paths[asset_cursor % len(visual_asset_paths)]
-                asset_cursor += 1
+            if visual_strategy == "generated_scene" and generated_assets:
+                visual_asset_path = generated_assets[generated_cursor % len(generated_assets)]
+                generated_cursor += 1
+            elif visual_strategy == "paper_figure" and paper_assets:
+                visual_asset_path = paper_assets[paper_cursor % len(paper_assets)]
+                paper_cursor += 1
+            visual_asset_kind = (
+                "paper_figure"
+                if visual_strategy == "paper_figure" and visual_asset_path
+                else "generated"
+                if visual_strategy == "generated_scene" and visual_asset_path
+                else "renderer"
+            )
+            asset_status = "ready" if visual_asset_path else "structured"
+            repair_target = (
+                "visual_asset"
+                if slide.get("visual_asset_mode") == "structured_scene_fallback"
+                and visual_kind == "image"
+                else "none"
+            )
             timeline.append(
                 {
                     "shot_id": f"s{slide_index:02d}-{beat_index + 1:02d}",
@@ -2439,9 +2568,15 @@ def build_scene_timeline(
                     "focus_text": focus_text,
                     "focus_index": focus_index,
                     "visual_kind": visual_kind,
+                    "visual_strategy": visual_strategy,
+                    "visual_strategy_reason": strategy_reason,
+                    "asset_source": visual_asset_kind,
+                    "asset_status": asset_status,
+                    "fallback_strategy": "procedural_diagram" if visual_kind == "flow" else "kinetic_text",
+                    "repair_target": repair_target,
                     "has_generated_image": has_generated_image,
                     "visual_asset_path": visual_asset_path,
-                    "visual_asset_kind": "paper_figure" if "paper_figures" in visual_asset_path else "generated" if visual_asset_path else "none",
+                    "visual_asset_kind": visual_asset_kind,
                     "composition_variant": (slide_index + beat_index) % 4,
                     "layout_variant": scene_direction["layout"],
                     "entrance": entrance,
@@ -6643,6 +6778,71 @@ def _draw_arbor_caption(draw: Any, caption: str, *, width: int, height: int, fon
     )
 
 
+def _scene_asset_manifest(scene_timeline: list[dict[str, Any]]) -> dict[str, Any]:
+    assets = [
+        {
+            "shot_id": shot.get("shot_id"),
+            "slide_index": shot.get("slide_index"),
+            "start_sec": shot.get("start_sec"),
+            "end_sec": shot.get("end_sec"),
+            "visual_strategy": shot.get("visual_strategy"),
+            "strategy_reason": shot.get("visual_strategy_reason"),
+            "asset_source": shot.get("asset_source"),
+            "asset_status": shot.get("asset_status"),
+            "asset_path": shot.get("visual_asset_path"),
+            "fallback_strategy": shot.get("fallback_strategy"),
+            "repair_target": shot.get("repair_target"),
+        }
+        for shot in scene_timeline
+    ]
+    strategy_counts: dict[str, int] = {}
+    for asset in assets:
+        strategy = str(asset.get("visual_strategy") or "unknown")
+        strategy_counts[strategy] = strategy_counts.get(strategy, 0) + 1
+    return {
+        "version": 1,
+        "mode": "shot_level_visual_routing",
+        "shot_count": len(assets),
+        "strategy_counts": strategy_counts,
+        "repairable_shots": [asset["shot_id"] for asset in assets if asset.get("repair_target") != "none"],
+        "assets": assets,
+    }
+
+
+def _write_pipeline_checkpoint(
+    out_dir: Path,
+    *,
+    stage: str,
+    source: dict[str, Any],
+    slides: list[dict[str, Any]],
+    subtitles: list[dict[str, Any]],
+    cursor_plan: list[dict[str, Any]],
+    talker: dict[str, Any],
+    extra: dict[str, Any] | None = None,
+) -> None:
+    payload = {
+        "version": 1,
+        "stage": stage,
+        "updated_at": _utc_now(),
+        "source": {
+            "title": source.get("title"),
+            "source_path": source.get("source_path"),
+            "kind": source.get("kind"),
+            "visual_theme": source.get("visual_theme"),
+        },
+        "slides": slides,
+        "subtitles": subtitles,
+        "cursor_plan": cursor_plan,
+        "talker_plan": talker,
+    }
+    if extra:
+        payload.update(extra)
+    path = out_dir / "pipeline_checkpoint.json"
+    temporary = out_dir / "pipeline_checkpoint.tmp.json"
+    temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(path)
+
+
 def run_video_pipeline(
     input_path: Path,
     *,
@@ -6714,6 +6914,16 @@ def run_video_pipeline(
         use_vlm_cursor=use_vlm_cursor,
     )
     talker = build_talker_plan(subtitles)
+    _write_pipeline_checkpoint(
+        out_dir,
+        stage="scene_planned",
+        source=source,
+        slides=slides,
+        subtitles=subtitles,
+        cursor_plan=cursor_plan,
+        talker=talker,
+        extra={"judge": judge, "revision_history": revision_history},
+    )
 
     _progress("pipeline", "generate slide images", current=5, total=12)
     paper_figures = extract_paper_figures(source, out_dir)
@@ -6753,6 +6963,27 @@ def run_video_pipeline(
             + ", ".join(missing_required_images)
             + ". Local placeholder rendering is disabled."
         )
+    preliminary_timeline = build_scene_timeline(source, slides, subtitles)
+    preliminary_manifest = _scene_asset_manifest(preliminary_timeline)
+    (out_dir / "asset_manifest.json").write_text(
+        json.dumps(preliminary_manifest, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    _write_pipeline_checkpoint(
+        out_dir,
+        stage="assets_ready",
+        source=source,
+        slides=slides,
+        subtitles=subtitles,
+        cursor_plan=cursor_plan,
+        talker=talker,
+        extra={
+            "judge": judge,
+            "revision_history": revision_history,
+            "image_generation": image_generation,
+            "asset_manifest": preliminary_manifest,
+        },
+    )
 
     _progress("pipeline", "write storyboard artifacts", current=6, total=12)
     write_slides_markdown(source, slides, out_dir / "slides.md")
@@ -6812,6 +7043,11 @@ def run_video_pipeline(
         encoding="utf-8",
     )
     scene_timeline = build_scene_timeline(source, slides, subtitles)
+    asset_manifest = _scene_asset_manifest(scene_timeline)
+    (out_dir / "asset_manifest.json").write_text(
+        json.dumps(asset_manifest, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
     (out_dir / "scene_timeline.json").write_text(
         json.dumps(
             {
@@ -6839,6 +7075,22 @@ def run_video_pipeline(
             ensure_ascii=False,
         ),
         encoding="utf-8",
+    )
+    _write_pipeline_checkpoint(
+        out_dir,
+        stage="audio_ready" if tts_result.get("ok") else "timeline_ready",
+        source=source,
+        slides=slides,
+        subtitles=subtitles,
+        cursor_plan=cursor_plan,
+        talker=talker,
+        extra={
+            "judge": judge,
+            "revision_history": revision_history,
+            "image_generation": image_generation,
+            "tts_generation": tts_result,
+            "asset_manifest": asset_manifest,
+        },
     )
     judge_path = out_dir / "judge_feedback.json"
     _progress("pipeline", "write final artifacts", current=8, total=12)
@@ -6928,10 +7180,13 @@ def run_video_pipeline(
         "image_api_requested": use_image_api,
         "image_model": os.environ.get("LUMID_IMAGE_MODEL") or os.environ.get("LUM_IMAGE_MODEL") or LUMID_IMAGE_MODEL,
         "generated_image_count": generated_image_count,
-        "generated_images_per_slide": int(os.environ.get("AUTO_VIDEO_IMAGES_PER_SLIDE", "2")),
+        "generated_images_per_slide": int(os.environ.get("AUTO_VIDEO_IMAGES_PER_SLIDE", "1")),
         "paper_figure_count": paper_figure_count,
         "unique_visual_asset_count": len(unique_visual_assets),
         "image_generation_path": str(out_dir / "image_generation.json"),
+        "asset_manifest_path": str(out_dir / "asset_manifest.json"),
+        "visual_strategy_counts": asset_manifest.get("strategy_counts", {}),
+        "repairable_shot_count": len(asset_manifest.get("repairable_shots", [])),
         "video_rendered": video_rendered,
         "fps": fps,
         "renderer_version": "scene_based_research_explainer_v2",

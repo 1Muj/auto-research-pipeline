@@ -503,7 +503,8 @@ def test_scene_timeline_splits_slides_into_video_shots() -> None:
     timeline = build_scene_timeline(source, slides, subtitles)
 
     assert len(timeline) == 3
-    assert timeline[0]["shot_type"] == "opener"
+    assert timeline[0]["shot_type"] == "key_claim"
+    assert timeline[0]["visual_strategy"] == "kinetic_text"
     assert timeline[0]["speech_start_sec"] == 0.3
     assert timeline[0]["speech_end_sec"] == 5.0
     assert timeline[1]["shot_type"] == "process_map"
@@ -533,8 +534,8 @@ def test_four_beat_sections_use_distinct_video_compositions() -> None:
     timeline = build_scene_timeline(source, slides, subtitles)
 
     assert [shot["shot_type"] for shot in timeline] == [
-        "opener",
         "process_map",
+        "process_trace",
         "process_trace",
         "synthesis",
     ]
@@ -567,6 +568,35 @@ def test_generated_media_uses_establishing_and_closeup_video_framing(tmp_path: P
     ]
     assert [shot["framing"] for shot in shots[:2]] == ["full_frame", "close_up"]
     assert all(shot["background_stage"] == "immersive" for shot in shots[:2])
+
+
+def test_one_slide_routes_each_narration_beat_to_its_own_visual_strategy(tmp_path: Path) -> None:
+    visual = tmp_path / "scene.png"
+    Image.new("RGB", (1280, 720), "navy").save(visual)
+    slide = {
+        "index": 1,
+        "title": "PaperTalker overview",
+        "purpose": "Explain the idea and evidence.",
+        "bullets": ["Motivation", "Pipeline", "Six-times speedup", "Takeaway"],
+        "visual_kind": "image",
+        "visual_asset_paths": [str(visual)],
+    }
+    subtitles = [
+        {"slide_index": 1, "start_sec": 0, "end_sec": 6, "text": "Researchers struggle to create academic videos manually."},
+        {"slide_index": 1, "start_sec": 6, "end_sec": 12, "text": "The pipeline coordinates specialized agents."},
+        {"slide_index": 1, "start_sec": 12, "end_sec": 18, "text": "Parallel generation provides a 6x speedup."},
+        {"slide_index": 1, "start_sec": 18, "end_sec": 24, "text": "The system therefore makes paper explanations practical."},
+    ]
+
+    shots = build_scene_timeline({"title": "Demo"}, [slide], subtitles)
+
+    assert [shot["visual_strategy"] for shot in shots] == [
+        "generated_scene",
+        "procedural_diagram",
+        "procedural_chart",
+        "kinetic_text",
+    ]
+    assert [shot["asset_source"] for shot in shots] == ["generated", "renderer", "renderer", "renderer"]
 
 
 def test_long_single_narration_can_split_without_short_shots() -> None:

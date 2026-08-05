@@ -10,7 +10,9 @@ from auto_research.video_pipeline import (
     _call_json_model,
     _call_text_model,
     _enforce_source_storyboard_coverage,
+    _scene_asset_manifest,
     _text_model_provider,
+    _write_pipeline_checkpoint,
     build_scene_timeline,
     build_slides,
     load_source,
@@ -98,6 +100,56 @@ def test_invalid_model_json_is_retried_instead_of_using_local_content(monkeypatc
     data = _call_json_model("Return slides")
 
     assert data == {"slides": [{"title": "Ready"}]}
+
+
+def test_asset_manifest_exposes_strategy_and_local_repair_targets() -> None:
+    manifest = _scene_asset_manifest(
+        [
+            {
+                "shot_id": "s01-01",
+                "slide_index": 1,
+                "visual_strategy": "generated_scene",
+                "visual_strategy_reason": "Conceptual opening",
+                "asset_source": "generated",
+                "asset_status": "ready",
+                "visual_asset_path": "/tmp/scene.png",
+                "fallback_strategy": "kinetic_text",
+                "repair_target": "none",
+            },
+            {
+                "shot_id": "s01-02",
+                "slide_index": 1,
+                "visual_strategy": "kinetic_text",
+                "visual_strategy_reason": "Rejected image fallback",
+                "asset_source": "renderer",
+                "asset_status": "structured",
+                "visual_asset_path": "",
+                "fallback_strategy": "kinetic_text",
+                "repair_target": "visual_asset",
+            },
+        ]
+    )
+
+    assert manifest["strategy_counts"] == {"generated_scene": 1, "kinetic_text": 1}
+    assert manifest["repairable_shots"] == ["s01-02"]
+
+
+def test_pipeline_checkpoint_records_latest_completed_stage(tmp_path: Path) -> None:
+    _write_pipeline_checkpoint(
+        tmp_path,
+        stage="assets_ready",
+        source={"title": "Demo", "source_path": "/tmp/demo.pdf", "kind": "paper"},
+        slides=[{"index": 1, "title": "Scene"}],
+        subtitles=[{"slide_index": 1, "text": "Narration"}],
+        cursor_plan=[],
+        talker={"mode": "narration"},
+        extra={"asset_manifest": {"shot_count": 1}},
+    )
+
+    checkpoint = json.loads((tmp_path / "pipeline_checkpoint.json").read_text())
+    assert checkpoint["stage"] == "assets_ready"
+    assert checkpoint["asset_manifest"]["shot_count"] == 1
+    assert checkpoint["slides"][0]["title"] == "Scene"
 
 
 def test_vision_response_removes_generated_audio_payload() -> None:
