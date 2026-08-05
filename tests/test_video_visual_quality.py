@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from PIL import Image, ImageDraw
 
 from auto_research.video_pipeline import (
@@ -12,6 +13,7 @@ from auto_research.video_pipeline import (
     _clean_display_text,
     _draw_generated_image,
     _image_generation_prompt,
+    _image_retry_prompt,
     _metric_cards_from_items,
     _metric_card_focus,
     _merge_scene_beats,
@@ -267,6 +269,70 @@ def test_image_generation_creates_multiple_assets_for_non_image_slides(tmp_path:
     assert len(slides[0]["generated_image_paths"]) == 2
     assert len(slides[0]["visual_asset_paths"]) == 2
     assert all(item["ok"] for item in results)
+
+
+def test_image_retry_prompt_uses_validator_feedback() -> None:
+    prompt = _image_retry_prompt(
+        "Create one illustration.",
+        {
+            "reasons": [
+                "The image contains garbled text.",
+                "It appears to be a screenshot of a presentation slide.",
+            ]
+        },
+        attempt=2,
+    )
+
+    assert "previous image was rejected" in prompt.casefold()
+    assert "no glyphs" in prompt.casefold()
+    assert "borderless physical scene" in prompt.casefold()
+
+
+def test_required_image_failure_stops_before_later_slides(tmp_path: Path, monkeypatch) -> None:
+    calls = 0
+    monkeypatch.setenv("AUTO_VIDEO_IMAGE_MODE", "image_only")
+    monkeypatch.setenv("AUTO_VIDEO_IMAGES_PER_SLIDE", "1")
+    monkeypatch.setenv("AUTO_VIDEO_IMAGE_MAX_ATTEMPTS", "1")
+    monkeypatch.setenv("AUTO_VIDEO_REQUIRE_MODEL_IMAGES", "1")
+    monkeypatch.setenv("AUTO_VIDEO_FAIL_FAST_REQUIRED_IMAGES", "1")
+
+    def failed_image_api(_prompt: str, _out: Path) -> tuple[bool, str]:
+        nonlocal calls
+        calls += 1
+        return False, "provider unavailable"
+
+    monkeypatch.setattr("auto_research.video_pipeline._call_lumid_image", failed_image_api)
+    slides = [
+        {"index": 1, "title": "Required scene", "visual_kind": "image", "bullets": ["Claim"]},
+        {"index": 2, "title": "Later scene", "visual_kind": "image", "bullets": ["Claim"]},
+    ]
+
+    with pytest.raises(RuntimeError, match="Stopping immediately"):
+        generate_slide_images(slides, tmp_path, use_image_api=True)
+
+    assert calls == 1
+
+
+def test_normalize_slide_routes_diagrams_and_charts_to_structured_scenes() -> None:
+    flow = _normalize_slide(
+        1,
+        {
+            "title": "Tree Search",
+            "visual_kind": "image",
+            "visual_prompt": "Diagram showing tree search process selecting the best layout.",
+        },
+    )
+    metrics = _normalize_slide(
+        2,
+        {
+            "title": "Results",
+            "visual_kind": "image",
+            "visual_prompt": "Bar chart comparing performance against baselines.",
+        },
+    )
+
+    assert flow["visual_kind"] == "flow"
+    assert metrics["visual_kind"] == "metrics"
 
 
 def test_scene_timeline_rotates_visual_assets_between_image_shots(tmp_path: Path) -> None:

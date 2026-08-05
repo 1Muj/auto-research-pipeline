@@ -687,6 +687,31 @@ def _image_generation_prompt(slide: dict[str, Any], *, variant_index: int = 0) -
     ).strip()
 
 
+def _image_retry_prompt(base_prompt: str, validation: dict[str, Any], *, attempt: int) -> str:
+    reasons = " ".join(str(item) for item in validation.get("reasons", []) if str(item).strip())
+    reasons = re.sub(r"\s+", " ", reasons).strip()[:700]
+    lowered = reasons.casefold()
+    corrections: list[str] = []
+    if any(token in lowered for token in ("text", "garbled", "readable", "letter", "number")):
+        corrections.append(
+            "Remove every text-like mark: no glyphs, pseudo-letters, numbers, captions, labels, headers, or footers."
+        )
+    if any(token in lowered for token in ("screenshot", "slide", "document", "interface", "window", "dashboard")):
+        corrections.append(
+            "Render one borderless physical scene directly to the canvas, with no page, screen, window, panel, frame, toolbar, or presentation layout."
+        )
+    if any(token in lowered for token in ("generic", "does not", "not clearly", "missing", "relevance")):
+        corrections.append(
+            "Make the concrete mechanism unmistakable through distinct objects and spatial cause-and-effect; omit unrelated decoration."
+        )
+    if attempt >= 3:
+        corrections.append(
+            "Use a minimal scene with at most five large objects, generous empty background, and no small decorative details."
+        )
+    feedback = f"The previous image was rejected because: {reasons}." if reasons else "The previous image failed visual validation."
+    return " ".join([base_prompt, feedback, *corrections, "Generate a substantially different composition."])
+
+
 def _validate_generated_slide_image(slide: dict[str, Any], image_path: Path) -> dict[str, Any]:
     prompt = textwrap.dedent(
         f"""
@@ -891,7 +916,7 @@ def generate_slide_images(slides: list[dict[str, Any]], out_dir: Path, *, use_im
     image_dir = out_dir / "generated_images"
     image_dir.mkdir(parents=True, exist_ok=True)
     results: list[dict[str, Any]] = []
-    image_mode = os.environ.get("AUTO_VIDEO_IMAGE_MODE", "all").strip().lower()
+    image_mode = os.environ.get("AUTO_VIDEO_IMAGE_MODE", "image_only").strip().lower()
     variants_per_slide = max(1, int(os.environ.get("AUTO_VIDEO_IMAGES_PER_SLIDE", "2")))
     total = len(slides) * variants_per_slide
     _progress(
@@ -927,12 +952,15 @@ def generate_slide_images(slides: list[dict[str, Any]], out_dir: Path, *, use_im
             elif ok:
                 _progress("image_builder", "using cached image", current=progress_index, total=total, detail=f"slide={slide['index']} variant={variant_index + 1}")
             if not ok and eligible and use_image_api:
+                retry_validation = validation
                 for attempt in range(1, max_attempts + 1):
                     attempt_prompt = prompt
-                    if attempt == 2:
+                    if retry_validation:
+                        attempt_prompt = _image_retry_prompt(prompt, retry_validation, attempt=attempt)
+                    elif attempt == 2:
                         attempt_prompt += " Use a physical metaphor with characters and tangible objects placed directly on the background."
                     elif attempt >= 3:
-                        attempt_prompt += " Use a minimal abstract composition of large unlabelled icons connected by arrows, with no rectangular panels."
+                        attempt_prompt += " Use a minimal composition of large unlabelled objects with no rectangular panels."
                     _progress(
                         "image_builder",
                         "calling image model",
@@ -946,6 +974,7 @@ def generate_slide_images(slides: list[dict[str, Any]], out_dir: Path, *, use_im
                         ok = bool(validation.get("accepted"))
                         if not ok:
                             error = "image rejected: " + "; ".join(validation.get("reasons") or ["failed completeness or relevance checks"])
+                            retry_validation = validation
                     if ok:
                         break
             if ok:
@@ -989,6 +1018,25 @@ def generate_slide_images(slides: list[dict[str, Any]], out_dir: Path, *, use_im
         slide["visual_asset_paths"] = visual_assets
         slide["generated_image_prompt"] = prompts[0] if prompts else ""
         slide["generated_image_path"] = visual_assets[0] if visual_assets else ""
+        fail_fast = os.environ.get("AUTO_VIDEO_FAIL_FAST_REQUIRED_IMAGES", "1").strip().lower() not in {
+            "0", "false", "no", "off"
+        }
+        require_images = os.environ.get("AUTO_VIDEO_REQUIRE_MODEL_IMAGES", "1").strip().lower() not in {
+            "0", "false", "no", "off"
+        }
+        if (
+            fail_fast
+            and require_images
+            and use_image_api
+            and eligible
+            and slide_kind == "image"
+            and not visual_assets
+        ):
+            raise RuntimeError(
+                "Image model did not produce a validated asset after retries for: "
+                + str(slide.get("title") or f"Slide {slide.get('index')}")
+                + ". Stopping immediately instead of generating the remaining images."
+            )
     (out_dir / "image_generation.json").write_text(
         json.dumps(results, indent=2, ensure_ascii=False),
         encoding="utf-8",
@@ -1671,6 +1719,23 @@ def _normalize_slide(index: int, item: Any) -> dict[str, Any]:
         visual_kind = "image"
     if visual_kind not in VISUAL_KINDS:
         visual_kind = VISUAL_KINDS[(index - 1) % len(VISUAL_KINDS)]
+    visual_description = " ".join(
+        str(item.get(key) or "") for key in ("title", "purpose", "visual_prompt", "visual_caption")
+    ).casefold()
+    if visual_kind == "image":
+        if any(
+            phrase in visual_description
+            for phrase in ("bar chart", "line chart", "metric chart", "performance comparison", "benchmark scores")
+        ):
+            visual_kind = "metrics"
+        elif any(
+            phrase in visual_description
+            for phrase in (
+                "architecture diagram", "system architecture", "workflow diagram", "pipeline diagram",
+                "tree search", "process diagram", "flow diagram", "diagram showing",
+            )
+        ):
+            visual_kind = "flow"
     visual_items = item.get("visual_items") if isinstance(item.get("visual_items"), list) else []
     visual_table = item.get("visual_table") if isinstance(item.get("visual_table"), list) else []
     section = SLIDE_PLAN[index - 1][0] if index - 1 < len(SLIDE_PLAN) else "Slide"
