@@ -917,7 +917,7 @@ def generate_slide_images(slides: list[dict[str, Any]], out_dir: Path, *, use_im
     image_dir.mkdir(parents=True, exist_ok=True)
     results: list[dict[str, Any]] = []
     image_mode = os.environ.get("AUTO_VIDEO_IMAGE_MODE", "image_only").strip().lower()
-    variants_per_slide = max(1, int(os.environ.get("AUTO_VIDEO_IMAGES_PER_SLIDE", "2")))
+    variants_per_slide = max(1, int(os.environ.get("AUTO_VIDEO_IMAGES_PER_SLIDE", "1")))
     total = len(slides) * variants_per_slide
     _progress(
         "image_builder",
@@ -934,7 +934,7 @@ def generate_slide_images(slides: list[dict[str, Any]], out_dir: Path, *, use_im
         )
         generated_paths: list[str] = []
         validate_images = os.environ.get("AUTO_VIDEO_IMAGE_VALIDATE", "1").strip().lower() not in {"0", "false", "no", "off"}
-        max_attempts = max(1, int(os.environ.get("AUTO_VIDEO_IMAGE_MAX_ATTEMPTS", "3")))
+        max_attempts = max(1, int(os.environ.get("AUTO_VIDEO_IMAGE_MAX_ATTEMPTS", "2")))
         prompts: list[str] = []
         for variant_index in range(variants_per_slide):
             progress_index = (n - 1) * variants_per_slide + variant_index + 1
@@ -1018,10 +1018,31 @@ def generate_slide_images(slides: list[dict[str, Any]], out_dir: Path, *, use_im
         slide["visual_asset_paths"] = visual_assets
         slide["generated_image_prompt"] = prompts[0] if prompts else ""
         slide["generated_image_path"] = visual_assets[0] if visual_assets else ""
-        fail_fast = os.environ.get("AUTO_VIDEO_FAIL_FAST_REQUIRED_IMAGES", "1").strip().lower() not in {
+        if eligible and use_image_api and not visual_assets:
+            slide["visual_asset_mode"] = "structured_scene_fallback"
+            slide["visual_generation_error"] = next(
+                (
+                    str(item.get("error") or "")
+                    for item in reversed(results)
+                    if int(item.get("slide_index") or 0) == int(slide.get("index") or 0)
+                    and item.get("error")
+                ),
+                "No generated image passed visual validation.",
+            )
+            _progress(
+                "image_builder",
+                "continue with structured scene",
+                current=min(total, n * variants_per_slide),
+                total=total,
+                detail=f"slide={slide['index']} rejected generated assets will not be rendered",
+            )
+        else:
+            slide["visual_asset_mode"] = "generated_or_source" if visual_assets else "structured_scene"
+            slide["visual_generation_error"] = ""
+        fail_fast = os.environ.get("AUTO_VIDEO_FAIL_FAST_REQUIRED_IMAGES", "0").strip().lower() not in {
             "0", "false", "no", "off"
         }
-        require_images = os.environ.get("AUTO_VIDEO_REQUIRE_MODEL_IMAGES", "1").strip().lower() not in {
+        require_images = os.environ.get("AUTO_VIDEO_REQUIRE_MODEL_IMAGES", "0").strip().lower() not in {
             "0", "false", "no", "off"
         }
         if (
@@ -6719,7 +6740,7 @@ def run_video_pipeline(
         encoding="utf-8",
     )
     image_generation = generate_slide_images(slides, out_dir, use_image_api=use_image_api)
-    require_model_images = os.environ.get("AUTO_VIDEO_REQUIRE_MODEL_IMAGES", "1").strip().lower() not in {"0", "false", "no", "off"}
+    require_model_images = os.environ.get("AUTO_VIDEO_REQUIRE_MODEL_IMAGES", "0").strip().lower() not in {"0", "false", "no", "off"}
     missing_required_images = [
         str(slide.get("title") or f"Slide {slide.get('index')}")
         for slide in slides

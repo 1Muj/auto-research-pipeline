@@ -313,6 +313,39 @@ def test_required_image_failure_stops_before_later_slides(tmp_path: Path, monkey
     assert calls == 1
 
 
+def test_rejected_image_continues_with_explicit_structured_scene_fallback(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AUTO_VIDEO_IMAGE_MODE", "image_only")
+    monkeypatch.setenv("AUTO_VIDEO_IMAGES_PER_SLIDE", "1")
+    monkeypatch.setenv("AUTO_VIDEO_IMAGE_MAX_ATTEMPTS", "1")
+    monkeypatch.setenv("AUTO_VIDEO_REQUIRE_MODEL_IMAGES", "0")
+    monkeypatch.setenv("AUTO_VIDEO_FAIL_FAST_REQUIRED_IMAGES", "0")
+
+    def fake_image_api(_prompt: str, out: Path) -> tuple[bool, str]:
+        Image.new("RGB", (640, 360), "white").save(out)
+        return True, ""
+
+    monkeypatch.setattr("auto_research.video_pipeline._call_lumid_image", fake_image_api)
+    monkeypatch.setattr(
+        "auto_research.video_pipeline._validate_generated_slide_image",
+        lambda _slide, _path: {
+            "accepted": False,
+            "relevance_score": 4,
+            "complete_frame": True,
+            "no_screenshot_or_document_crop": False,
+            "no_readable_text": False,
+            "reasons": ["Browser chrome and garbled text."],
+        },
+    )
+    slide = {"index": 1, "title": "Challenge", "visual_kind": "image", "bullets": ["Claim"]}
+
+    results = generate_slide_images([slide], tmp_path, use_image_api=True)
+
+    assert results[0]["ok"] is False
+    assert slide["visual_asset_paths"] == []
+    assert slide["visual_asset_mode"] == "structured_scene_fallback"
+    assert "Browser chrome" in slide["visual_generation_error"]
+
+
 def test_normalize_slide_routes_diagrams_and_charts_to_structured_scenes() -> None:
     flow = _normalize_slide(
         1,
