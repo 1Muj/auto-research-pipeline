@@ -26,7 +26,7 @@ def main() -> None:
         results["text_model"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
     try:
-        image_path = out_dir / "qwen_image_smoke.png"
+        image_path = out_dir / "gpt_image_smoke.png"
         ok, err = _call_lumid_image(
             "Clean abstract academic diagram, no text, no UI, no screenshot, complete shapes inside frame.",
             image_path,

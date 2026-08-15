@@ -1,0 +1,320 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - text: For the complete documentation index, see
+    - link "llms.txt" [ref=e3] [cursor=pointer]:
+      - /url: /llms.txt
+    - text: . Markdown versions of documentation pages are available by appending
+    - code [ref=e4]: .md
+    - text: to the page URL.
+  - banner [ref=e5]:
+    - generic [ref=e6]:
+      - link [ref=e7] [cursor=pointer]:
+        - /url: /
+        - img "OpenAI Developers" [ref=e8]
+      - navigation [ref=e9]:
+        - link "Home" [ref=e11] [cursor=pointer]:
+          - /url: /
+        - link "API" [ref=e13] [cursor=pointer]:
+          - /url: /api/docs
+        - link "Codex" [ref=e15] [cursor=pointer]:
+          - /url: https://learn.chatgpt.com/docs
+        - link "ChatGPT" [ref=e19] [cursor=pointer]:
+          - /url: /chatgpt
+        - link "Resources" [ref=e23] [cursor=pointer]:
+          - /url: /learn
+      - generic [ref=e26]:
+        - button "Start searching" [ref=e27] [cursor=pointer]
+        - link "API Dashboard" [ref=e35] [cursor=pointer]:
+          - /url: https://platform.openai.com/login
+        - button "Toggle light and dark theme" [ref=e40] [cursor=pointer]
+  - navigation "API sections" [ref=e44]:
+    - link "Overview" [ref=e45] [cursor=pointer]:
+      - /url: /api/docs
+    - link "Models" [ref=e47] [cursor=pointer]:
+      - /url: /api/docs/models
+    - link "Agents" [ref=e50] [cursor=pointer]:
+      - /url: /api/docs/guides/agents
+    - link "Tools" [ref=e52] [cursor=pointer]:
+      - /url: /api/docs/guides/tools
+    - link "Voice & Audio" [ref=e54] [cursor=pointer]:
+      - /url: /api/docs/guides/realtime
+    - link "Production" [ref=e56] [cursor=pointer]:
+      - /url: /api/docs/guides/production-best-practices
+    - link "API reference" [ref=e58] [cursor=pointer]:
+      - /url: /api/reference/overview
+  - generic [ref=e61]:
+    - navigation [ref=e63]:
+      - list [ref=e65]:
+        - listitem [ref=e66]:
+          - link "Model catalog" [ref=e67] [cursor=pointer]:
+            - /url: /api/docs/models
+      - generic [ref=e69]:
+        - heading "Choose a model" [level=3] [ref=e70]
+        - list [ref=e71]:
+          - listitem [ref=e72]:
+            - link "Pricing" [ref=e73] [cursor=pointer]:
+              - /url: /api/docs/pricing
+          - listitem [ref=e75]:
+            - link "Model selection" [ref=e76] [cursor=pointer]:
+              - /url: /api/docs/guides/model-selection
+      - generic [ref=e78]:
+        - heading "Text and code" [level=3] [ref=e79]
+        - list [ref=e80]:
+          - listitem [ref=e81]:
+            - link "Text generation" [ref=e82] [cursor=pointer]:
+              - /url: /api/docs/guides/text
+          - listitem [ref=e84]:
+            - link "Code generation" [ref=e85] [cursor=pointer]:
+              - /url: /api/docs/guides/code-generation
+          - listitem [ref=e87]:
+            - link "Structured output" [ref=e88] [cursor=pointer]:
+              - /url: /api/docs/guides/structured-outputs
+      - generic [ref=e90]:
+        - heading "Prompting" [level=3] [ref=e91]
+        - list [ref=e92]:
+          - listitem [ref=e93]:
+            - link "Overview" [ref=e94] [cursor=pointer]:
+              - /url: /api/docs/guides/prompting
+          - listitem [ref=e96]:
+            - link "Prompt engineering" [ref=e97] [cursor=pointer]:
+              - /url: /api/docs/guides/prompt-engineering
+          - listitem [ref=e99]:
+            - link "Citation formatting" [ref=e100] [cursor=pointer]:
+              - /url: /api/docs/guides/citation-formatting
+          - listitem [ref=e102]:
+            - link "Migration guide" [ref=e103] [cursor=pointer]:
+              - /url: /api/docs/guides/prompting/migrate-from-prompt-object
+          - listitem [ref=e105]:
+            - link "Prompt generation" [ref=e106] [cursor=pointer]:
+              - /url: /api/docs/guides/prompt-generation
+          - listitem [ref=e108]:
+            - link "Frontend prompting" [ref=e109] [cursor=pointer]:
+              - /url: /api/docs/guides/frontend-prompt
+      - generic [ref=e111]:
+        - heading "Reasoning" [level=3] [ref=e112]
+        - list [ref=e113]:
+          - listitem [ref=e114]:
+            - link "Reasoning models" [ref=e115] [cursor=pointer]:
+              - /url: /api/docs/guides/reasoning
+          - listitem [ref=e117]:
+            - link "Reasoning best practices" [ref=e118] [cursor=pointer]:
+              - /url: /api/docs/guides/reasoning-best-practices
+      - generic [ref=e120]:
+        - heading "Images and video" [level=3] [ref=e121]
+        - list [ref=e122]:
+          - listitem [ref=e123]:
+            - link "Images and vision" [ref=e124] [cursor=pointer]:
+              - /url: /api/docs/guides/images-vision
+          - listitem [ref=e126]:
+            - link "Image generation" [ref=e127] [cursor=pointer]:
+              - /url: /api/docs/guides/image-generation
+          - listitem [ref=e129]:
+            - link "Video generation" [ref=e130] [cursor=pointer]:
+              - /url: /api/docs/guides/video-generation
+      - generic [ref=e132]:
+        - heading "Realtime and audio" [level=3] [ref=e133]
+        - list [ref=e134]:
+          - listitem [ref=e135]:
+            - link "Audio and speech" [ref=e136] [cursor=pointer]:
+              - /url: /api/docs/guides/audio
+          - listitem [ref=e138]:
+            - link "Overview" [ref=e139] [cursor=pointer]:
+              - /url: /api/docs/guides/realtime
+          - listitem [ref=e141]:
+            - link "Voice agents" [ref=e142] [cursor=pointer]:
+              - /url: /api/docs/guides/voice-agents
+      - generic [ref=e144]:
+        - heading "Specialized models" [level=3] [ref=e145]
+        - list [ref=e146]:
+          - listitem [ref=e147]:
+            - link "Deep research" [ref=e148] [cursor=pointer]:
+              - /url: /api/docs/guides/deep-research
+          - listitem [ref=e150]:
+            - link "Embeddings" [ref=e151] [cursor=pointer]:
+              - /url: /api/docs/guides/embeddings
+          - listitem [ref=e153]:
+            - link "Moderation" [ref=e154] [cursor=pointer]:
+              - /url: /api/docs/guides/moderation
+    - main [ref=e156]:
+      - generic [ref=e158]:
+        - link "Models" [ref=e160] [cursor=pointer]:
+          - /url: /api/docs/models
+        - generic [ref=e163]:
+          - generic [ref=e164]:
+            - generic [ref=e165]:
+              - img "gpt-image-2" [ref=e168]
+              - generic [ref=e169]:
+                - generic [ref=e170]:
+                  - generic [ref=e171]: GPT Image 2
+                  - generic [ref=e172]:
+                    - button "Default" [ref=e173] [cursor=pointer]
+                    - button [ref=e180] [cursor=pointer]
+                - generic [ref=e186]: State-of-the-art image generation model
+            - generic [ref=e187]:
+              - button "Compare" [ref=e188] [cursor=pointer]
+              - button "Try in Playground" [ref=e190] [cursor=pointer]
+          - generic [ref=e192]:
+            - generic [ref=e193]:
+              - generic [ref=e194]: Performance
+              - generic [ref=e207]: Highest
+            - generic [ref=e209]:
+              - generic [ref=e210]: Speed
+              - generic [ref=e219]: Medium
+            - generic [ref=e222]:
+              - generic [ref=e223]: Input
+              - generic [ref=e248]: Text, image
+            - generic [ref=e250]:
+              - generic [ref=e251]: Output
+              - generic [ref=e280]: Image
+          - paragraph [ref=e284]:
+            - text: GPT Image 2 is our state-of-the-art image generation model for fast, high-quality image generation and editing. It supports flexible image sizes and high-fidelity image inputs. Learn more in our
+            - link "image generation guide" [ref=e285] [cursor=pointer]:
+              - /url: /api/docs/guides/image-generation
+            - text: ", or see the"
+            - link "pricing page" [ref=e286] [cursor=pointer]:
+              - /url: /api/docs/pricing#image-generation
+            - text: and
+            - link "image generation calculator" [ref=e287] [cursor=pointer]:
+              - /url: /api/docs/guides/image-generation#calculating-costs
+            - text: for cost estimates.
+          - generic [ref=e290]:
+            - generic [ref=e291]: Modalities
+            - generic [ref=e293]:
+              - generic [ref=e300]:
+                - generic [ref=e301]: Text
+                - generic [ref=e302]: Input only
+              - generic [ref=e308]:
+                - generic [ref=e309]: Image
+                - generic [ref=e310]: Input and output
+              - generic [ref=e321]:
+                - generic [ref=e322]: Audio
+                - generic [ref=e323]: Not supported
+              - generic [ref=e334]:
+                - generic [ref=e335]: Video
+                - generic [ref=e336]: Not supported
+          - generic [ref=e338]:
+            - generic [ref=e339]: Endpoints
+            - generic [ref=e341]:
+              - generic [ref=e352]:
+                - generic [ref=e353]: Chat Completions
+                - generic [ref=e354]: v1/chat/completions
+              - generic [ref=e365]:
+                - generic [ref=e366]: Responses
+                - generic [ref=e367]: v1/responses
+              - generic [ref=e377]:
+                - generic [ref=e378]: Realtime
+                - generic [ref=e379]: v1/realtime
+              - generic [ref=e389]:
+                - generic [ref=e390]: Realtime translation
+                - generic [ref=e391]: v1/realtime/translations
+              - generic [ref=e401]:
+                - generic [ref=e402]: Realtime transcription
+                - generic [ref=e403]: v1/realtime/transcription_sessions
+              - generic [ref=e414]:
+                - generic [ref=e415]: Assistants
+                - generic [ref=e416]: v1/assistants
+              - generic [ref=e423]:
+                - generic [ref=e424]: Batch
+                - generic [ref=e425]: v1/batch
+              - generic [ref=e435]:
+                - generic [ref=e436]: Fine-tuning
+                - generic [ref=e437]: v1/fine-tuning
+              - generic [ref=e447]:
+                - generic [ref=e448]: Embeddings
+                - generic [ref=e449]: v1/embeddings
+              - generic [ref=e455]:
+                - generic [ref=e456]: Image generation
+                - generic [ref=e457]: v1/images/generations
+              - generic [ref=e468]:
+                - generic [ref=e469]: Videos
+                - generic [ref=e470]: v1/videos
+              - generic [ref=e477]:
+                - generic [ref=e478]: Image edit
+                - generic [ref=e479]: v1/images/edits
+              - generic [ref=e489]:
+                - generic [ref=e490]: Speech generation
+                - generic [ref=e491]: v1/audio/speech
+              - generic [ref=e501]:
+                - generic [ref=e502]: Transcription
+                - generic [ref=e503]: v1/audio/transcriptions
+              - generic [ref=e513]:
+                - generic [ref=e514]: Translation
+                - generic [ref=e515]: v1/audio/translations
+              - generic [ref=e525]:
+                - generic [ref=e526]: Moderation
+                - generic [ref=e527]: v1/moderations
+              - generic [ref=e538]:
+                - generic [ref=e539]: Completions (legacy)
+                - generic [ref=e540]: v1/completions
+          - generic [ref=e542]:
+            - generic [ref=e543]: Features
+            - generic [ref=e545]:
+              - generic [ref=e555]:
+                - generic [ref=e556]: Streaming
+                - generic [ref=e557]: Not supported
+              - generic [ref=e568]:
+                - generic [ref=e569]: Function calling
+                - generic [ref=e570]: Not supported
+              - generic [ref=e580]:
+                - generic [ref=e581]: Structured outputs
+                - generic [ref=e582]: Not supported
+              - generic [ref=e592]:
+                - generic [ref=e593]: Fine-tuning
+                - generic [ref=e594]: Not supported
+              - generic [ref=e604]:
+                - generic [ref=e605]: Predicted outputs
+                - generic [ref=e606]: Not supported
+          - generic [ref=e608]:
+            - generic [ref=e609]: Snapshots
+            - generic [ref=e610]:
+              - generic [ref=e611]: Snapshots let you lock in a specific version of the model so that performance and behavior remain consistent. Below is a list of all available snapshots and aliases for GPT Image 2.
+              - generic [ref=e613]:
+                - generic [ref=e614]:
+                  - img "gpt-image-2" [ref=e616]
+                  - generic [ref=e618]:
+                    - generic [ref=e619]: gpt-image-2
+                    - generic [ref=e620]: gpt-image-2-2026-04-21
+                - generic [ref=e624]: gpt-image-2-2026-04-21
+          - generic [ref=e629]:
+            - generic [ref=e630]: Rate limits
+            - generic [ref=e631]:
+              - generic [ref=e632]: Rate limits ensure fair and reliable access to the API by placing specific caps on requests, tokens, audio duration, or other usage within a given time period. Your usage tier determines how high these limits are set and automatically increases as you send more requests and spend more on the API.
+              - table [ref=e634]:
+                - rowgroup [ref=e635]:
+                  - row [ref=e636]:
+                    - columnheader "Tier" [ref=e637]
+                    - columnheader "TPM" [ref=e638]
+                    - columnheader "IPM" [ref=e639]
+                - rowgroup [ref=e640]:
+                  - row [ref=e641]:
+                    - cell "Free" [ref=e642]
+                    - cell "Not supported" [ref=e643]
+                  - row [ref=e644]:
+                    - cell "Tier 1" [ref=e645]
+                    - cell "100,000" [ref=e646]
+                    - cell "5" [ref=e647]
+                  - row [ref=e648]:
+                    - cell "Tier 2" [ref=e649]
+                    - cell "250,000" [ref=e650]
+                    - cell "20" [ref=e651]
+                  - row [ref=e652]:
+                    - cell "Tier 3" [ref=e653]
+                    - cell "800,000" [ref=e654]
+                    - cell "50" [ref=e655]
+                  - row [ref=e656]:
+                    - cell "Tier 4" [ref=e657]
+                    - cell "3,000,000" [ref=e658]
+                    - cell "150" [ref=e659]
+                  - row [ref=e660]:
+                    - cell "Tier 5" [ref=e661]
+                    - cell "8,000,000" [ref=e662]
+                    - cell "250" [ref=e663]
+  - generic:
+    - button "Ask AI" [ref=e664] [cursor=pointer]
+    - dialog [ref=e666]:
+      - banner [ref=e667]:
+        - heading "Docs agent" [level=2] [ref=e668]
+        - generic [ref=e669]:
+          - button "Start a new docs agent chat" [ref=e670] [cursor=pointer]
+          - button "Close docs agent" [ref=e673] [cursor=pointer]
+      - paragraph [ref=e678]: Loading docs agent...

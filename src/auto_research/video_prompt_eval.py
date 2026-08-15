@@ -555,6 +555,8 @@ def load_artifact_context(
         "cursor_plan": "cursor_plan.json",
         "talker_plan": "talker_plan.json",
         "scene_timeline": "scene_timeline.json",
+        "image_generation": "image_generation.json",
+        "asset_manifest": "asset_manifest.json",
     }
     context: dict[str, Any] = {
         "artifact_dir": str(artifact_dir.resolve()),
@@ -764,6 +766,48 @@ def summarize_artifact_context(artifact_context: dict[str, Any]) -> dict[str, An
         if isinstance(storyboard.get("scene_timeline"), list)
         else []
     )
+    image_generation = (
+        artifact_context.get("image_generation")
+        if isinstance(artifact_context.get("image_generation"), list)
+        else []
+    )
+    asset_manifest = (
+        artifact_context.get("asset_manifest")
+        if isinstance(artifact_context.get("asset_manifest"), dict)
+        else {}
+    )
+    accepted_images = [item for item in image_generation if isinstance(item, dict) and item.get("ok")]
+    skipped_images = [
+        item
+        for item in image_generation
+        if isinstance(item, dict)
+        and not item.get("ok")
+        and str(item.get("error") or "").strip().casefold().startswith(("mode=", "api disabled"))
+    ]
+    failed_images = [
+        item
+        for item in image_generation
+        if isinstance(item, dict)
+        and not item.get("ok")
+        and str(item.get("error") or "").strip()
+        and item not in skipped_images
+    ]
+    slides_by_index = {
+        int(slide.get("index") or 0): slide
+        for slide in slides
+        if isinstance(slide, dict)
+    }
+    unresolved_failed_images = []
+    for item in failed_images:
+        slide = slides_by_index.get(int(item.get("slide_index") or 0), {})
+        has_final_asset = bool(slide.get("visual_asset_paths"))
+        has_renderer_strategy = str(slide.get("visual_kind") or "").casefold() in {
+            "flow",
+            "table",
+            "metrics",
+        }
+        if not has_final_asset and not has_renderer_strategy:
+            unresolved_failed_images.append(item)
     slide_summaries: list[dict[str, Any]] = []
     for slide in slides[:12]:
         if not isinstance(slide, dict):
@@ -777,6 +821,11 @@ def summarize_artifact_context(artifact_context: dict[str, Any]) -> dict[str, An
                 "speaker_note": _truncate_text(slide.get("speaker_note"), 700),
                 "visual_kind": slide.get("visual_kind"),
                 "visual_caption": _truncate_text(slide.get("visual_caption"), 220),
+                "visual_asset_preference": slide.get("visual_asset_preference"),
+                "selected_visual_asset_names": [
+                    Path(str(path)).name for path in (slide.get("visual_asset_paths") or [])[:4]
+                ],
+                "visual_asset_comparison": slide.get("visual_asset_comparison") or {},
             }
         )
     subtitle_samples = [
@@ -840,7 +889,26 @@ def summarize_artifact_context(artifact_context: dict[str, Any]) -> dict[str, An
             "tts_ok": metrics.get("tts_ok"),
             "image_api_requested": metrics.get("image_api_requested"),
             "image_generation_ok": metrics.get("image_generation_ok"),
+            "generated_image_count": metrics.get("generated_image_count"),
+            "paper_figure_count": metrics.get("paper_figure_count"),
             "vlm_cursor_points": metrics.get("vlm_cursor_points"),
+        },
+        "visual_asset_summary": {
+            "accepted_generated_images": len(accepted_images),
+            "rejected_candidate_images": len(failed_images),
+            "unresolved_final_visual_failures": len(unresolved_failed_images),
+            "intentionally_skipped_generated_images": len(skipped_images),
+            "source_paper_figures": int(metrics.get("paper_figure_count") or 0),
+            "scene_shot_count": asset_manifest.get("shot_count", len(scene_timeline)),
+            "strategy_counts": asset_manifest.get("strategy_counts", {}),
+            "repairable_shots": asset_manifest.get("repairable_shots", []),
+            "rejected_candidate_samples": [
+                {
+                    "slide_index": item.get("slide_index"),
+                    "error": _truncate_text(item.get("error"), 260),
+                }
+                for item in unresolved_failed_images[:4]
+            ],
         },
         "previous_pipeline_judge": {
             "overall_score": judge.get("overall_score"),
@@ -899,6 +967,20 @@ def build_judge_prompt(
 
         If actual video frames or audio are not provided, clearly mark those dimensions as
         lower-confidence instead of pretending you inspected them.
+        Do not infer visual variety from shot count alone. Use visual_asset_summary: a video
+        with no accepted generated images, no source-paper figures, and mostly one renderer
+        strategy cannot receive an excellent visual-quality score without direct frame evidence.
+        Treat the slides' selected_visual_asset_names, visual_asset_preference, asset comparison,
+        and scene timeline as authoritative descriptions of the final video. Rejected candidate
+        images are retry history: they are not present in the final video unless a selected asset
+        explicitly names them. Never cite a rejected_candidate_sample as evidence of an on-screen
+        defect. Count it as a final visual failure only when the affected slide has no selected
+        visual asset and no renderer strategy. Treat repairable shots as risks, and do not count
+        intentionally skipped generated images as failures when the slide uses a procedural or
+        source-paper visual strategy instead.
+        Before returning, verify that every claimed defect appears in the target artifact summary.
+        Do not report wording that is absent from the current subtitle samples, and do not describe
+        an image object that is absent from the selected final assets or scene timeline.
 
         Return JSON only:
         {{
@@ -1119,6 +1201,90 @@ def fallback_artifact_evaluation(artifact_context: dict[str, Any], *, reason: st
     }
 
 
+def build_compact_judge_prompt(
+    rubric: dict[str, Any], artifact_context: dict[str, Any]
+) -> str:
+    summary = summarize_artifact_context(artifact_context)
+    compact_context = {
+        "metrics": summary.get("metrics", {}),
+        "visual_asset_summary": summary.get("visual_asset_summary", {}),
+        "slides": [
+            {
+                "index": slide.get("index"),
+                "title": slide.get("title"),
+                "purpose": slide.get("purpose"),
+                "bullets": slide.get("bullets", [])[:3],
+                "visual_kind": slide.get("visual_kind"),
+            }
+            for slide in summary.get("slides", [])[:10]
+            if isinstance(slide, dict)
+        ],
+        "subtitle_samples": summary.get("subtitle_samples", [])[:10],
+        "scene_shot_samples": summary.get("scene_shot_samples", [])[:14],
+        "missing_files": summary.get("missing_files", []),
+        "modality_note": summary.get("modality_note"),
+    }
+    dimensions = [
+        {
+            "id": item.get("id"),
+            "weight": item.get("weight"),
+            "description": item.get("description"),
+        }
+        for item in rubric.get("dimensions", DEFAULT_DIMENSIONS)
+        if isinstance(item, dict)
+    ]
+    return textwrap.dedent(
+        f"""
+        You are a strict evaluator of an academic PPT explainer video. Return one valid JSON
+        object only, with no markdown and no text outside JSON. Use scores from 0 to 10 and
+        confidence from 0 to 1. Do not invent direct audio or frame observations.
+
+        Dimensions:
+        {json.dumps(dimensions, ensure_ascii=False)}
+
+        Compact artifact evidence:
+        {json.dumps(compact_context, ensure_ascii=False)}
+
+        Required keys:
+        overall_score, confidence, classification, dimension_scores, major_bottlenecks,
+        highest_priority_fixes, prompt_improvement_suggestions, user_preference_inference.
+        classification must be excellent, good, medium, weak, or poor.
+        dimension_scores must contain content_script_quality, slide_visual_quality,
+        audio_narration_quality, cross_modal_alignment, stability_overall_experience, and
+        actionable_revision_quality. Every dimension must contain score, confidence,
+        evidence, problems, and revision_advice arrays. Keep every array to at most three
+        concise items so the JSON completes reliably.
+        """
+    ).strip()
+
+
+def _last_valid_model_evaluation(
+    artifact_dir: Path, *, exclude_path: Path
+) -> dict[str, Any] | None:
+    candidates = sorted(
+        artifact_dir.glob("directorbench_prompt_eval_report*.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for path in candidates:
+        if path.resolve() == exclude_path.resolve():
+            continue
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        evaluation = report.get("evaluation") if isinstance(report, dict) else None
+        if not isinstance(evaluation, dict):
+            continue
+        if evaluation.get("fallback_reason"):
+            continue
+        if evaluation.get("classification") in {"model_parse_failed", "not_run", None}:
+            continue
+        if isinstance(evaluation.get("overall_score"), (int, float)):
+            return evaluation
+    return None
+
+
 def run_prompt_evaluation(
     examples_path: Path | None,
     artifact_dir: Path,
@@ -1134,11 +1300,34 @@ def run_prompt_evaluation(
     prompt = build_judge_prompt(rubric, examples, artifact_context)
     prompt_package = build_prompt_package(rubric)
     evaluation = evaluate_with_prompt(prompt, use_api=use_api)
+    evaluation_attempts = [
+        {"mode": "full", "classification": evaluation.get("classification")}
+    ]
+    compact_prompt = ""
     if evaluation.get("classification") == "model_parse_failed":
-        evaluation = fallback_artifact_evaluation(
-            artifact_context,
-            reason="Model evaluator returned empty or invalid JSON.",
+        compact_prompt = build_compact_judge_prompt(rubric, artifact_context)
+        compact_evaluation = evaluate_with_prompt(compact_prompt, use_api=use_api)
+        evaluation_attempts.append(
+            {"mode": "compact", "classification": compact_evaluation.get("classification")}
         )
+        if compact_evaluation.get("classification") != "model_parse_failed":
+            evaluation = compact_evaluation
+        else:
+            previous = _last_valid_model_evaluation(artifact_dir, exclude_path=out_path)
+            if previous is not None:
+                evaluation = dict(previous)
+                evaluation["preserved_from_previous_valid_report"] = True
+                evaluation_attempts.append(
+                    {
+                        "mode": "preserved_previous",
+                        "classification": evaluation.get("classification"),
+                    }
+                )
+            else:
+                evaluation = fallback_artifact_evaluation(
+                    artifact_context,
+                    reason="Full and compact model evaluators returned empty or invalid JSON.",
+                )
     report = {
         "created_at": _utc_now(),
         "examples_path": str(examples_path.resolve()) if examples_path else "builtin",
@@ -1147,7 +1336,9 @@ def run_prompt_evaluation(
         "learned_rubric": rubric,
         "prompt_package": prompt_package,
         "evaluation": evaluation,
+        "evaluation_attempts": evaluation_attempts,
         "judge_prompt": prompt,
+        "compact_judge_prompt": compact_prompt,
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")

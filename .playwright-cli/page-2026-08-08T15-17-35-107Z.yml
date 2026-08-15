@@ -1,0 +1,664 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - text: For the complete documentation index, see
+    - link "llms.txt" [ref=e3] [cursor=pointer]:
+      - /url: /llms.txt
+    - text: . Markdown versions of documentation pages are available by appending
+    - code [ref=e4]: .md
+    - text: to the page URL.
+  - banner [ref=e5]:
+    - generic [ref=e6]:
+      - link [ref=e7] [cursor=pointer]:
+        - /url: /
+        - img "OpenAI Developers" [ref=e8]
+      - navigation [ref=e9]:
+        - link "Home" [ref=e11] [cursor=pointer]:
+          - /url: /
+        - link "API" [ref=e13] [cursor=pointer]:
+          - /url: /api/docs
+        - link "Codex" [ref=e15] [cursor=pointer]:
+          - /url: https://learn.chatgpt.com/docs
+        - link "ChatGPT" [ref=e19] [cursor=pointer]:
+          - /url: /chatgpt
+        - link "Resources" [ref=e23] [cursor=pointer]:
+          - /url: /learn
+      - generic [ref=e26]:
+        - button "Start searching" [ref=e27] [cursor=pointer]
+        - link "API Dashboard" [ref=e35] [cursor=pointer]:
+          - /url: https://platform.openai.com/login
+        - button "Toggle light and dark theme" [ref=e40] [cursor=pointer]
+  - navigation "API sections" [ref=e44]:
+    - link "Overview" [ref=e45] [cursor=pointer]:
+      - /url: /api/docs
+    - link "Models" [ref=e47] [cursor=pointer]:
+      - /url: /api/docs/models
+    - link "Agents" [ref=e50] [cursor=pointer]:
+      - /url: /api/docs/guides/agents
+    - link "Tools" [ref=e52] [cursor=pointer]:
+      - /url: /api/docs/guides/tools
+    - link "Voice & Audio" [ref=e54] [cursor=pointer]:
+      - /url: /api/docs/guides/realtime
+    - link "Production" [ref=e56] [cursor=pointer]:
+      - /url: /api/docs/guides/production-best-practices
+    - link "API reference" [ref=e58] [cursor=pointer]:
+      - /url: /api/reference/overview
+  - generic [ref=e61]:
+    - navigation [ref=e63]:
+      - list [ref=e65]:
+        - listitem [ref=e66]:
+          - link "Model catalog" [ref=e67] [cursor=pointer]:
+            - /url: /api/docs/models
+      - generic [ref=e69]:
+        - heading "Choose a model" [level=3] [ref=e70]
+        - list [ref=e71]:
+          - listitem [ref=e72]:
+            - link "Pricing" [ref=e73] [cursor=pointer]:
+              - /url: /api/docs/pricing
+          - listitem [ref=e75]:
+            - link "Model selection" [ref=e76] [cursor=pointer]:
+              - /url: /api/docs/guides/model-selection
+      - generic [ref=e78]:
+        - heading "Text and code" [level=3] [ref=e79]
+        - list [ref=e80]:
+          - listitem [ref=e81]:
+            - link "Text generation" [ref=e82] [cursor=pointer]:
+              - /url: /api/docs/guides/text
+          - listitem [ref=e84]:
+            - link "Code generation" [ref=e85] [cursor=pointer]:
+              - /url: /api/docs/guides/code-generation
+          - listitem [ref=e87]:
+            - link "Structured output" [ref=e88] [cursor=pointer]:
+              - /url: /api/docs/guides/structured-outputs
+      - generic [ref=e90]:
+        - heading "Prompting" [level=3] [ref=e91]
+        - list [ref=e92]:
+          - listitem [ref=e93]:
+            - link "Overview" [ref=e94] [cursor=pointer]:
+              - /url: /api/docs/guides/prompting
+          - listitem [ref=e96]:
+            - link "Prompt engineering" [ref=e97] [cursor=pointer]:
+              - /url: /api/docs/guides/prompt-engineering
+          - listitem [ref=e99]:
+            - link "Citation formatting" [ref=e100] [cursor=pointer]:
+              - /url: /api/docs/guides/citation-formatting
+          - listitem [ref=e102]:
+            - link "Migration guide" [ref=e103] [cursor=pointer]:
+              - /url: /api/docs/guides/prompting/migrate-from-prompt-object
+          - listitem [ref=e105]:
+            - link "Prompt generation" [ref=e106] [cursor=pointer]:
+              - /url: /api/docs/guides/prompt-generation
+          - listitem [ref=e108]:
+            - link "Frontend prompting" [ref=e109] [cursor=pointer]:
+              - /url: /api/docs/guides/frontend-prompt
+      - generic [ref=e111]:
+        - heading "Reasoning" [level=3] [ref=e112]
+        - list [ref=e113]:
+          - listitem [ref=e114]:
+            - link "Reasoning models" [ref=e115] [cursor=pointer]:
+              - /url: /api/docs/guides/reasoning
+          - listitem [ref=e117]:
+            - link "Reasoning best practices" [ref=e118] [cursor=pointer]:
+              - /url: /api/docs/guides/reasoning-best-practices
+      - generic [ref=e120]:
+        - heading "Images and video" [level=3] [ref=e121]
+        - list [ref=e122]:
+          - listitem [ref=e123]:
+            - link "Images and vision" [ref=e124] [cursor=pointer]:
+              - /url: /api/docs/guides/images-vision
+          - listitem [ref=e126]:
+            - link "Image generation" [ref=e127] [cursor=pointer]:
+              - /url: /api/docs/guides/image-generation
+          - listitem [ref=e129]:
+            - link "Video generation" [ref=e130] [cursor=pointer]:
+              - /url: /api/docs/guides/video-generation
+      - generic [ref=e132]:
+        - heading "Realtime and audio" [level=3] [ref=e133]
+        - list [ref=e134]:
+          - listitem [ref=e135]:
+            - link "Audio and speech" [ref=e136] [cursor=pointer]:
+              - /url: /api/docs/guides/audio
+          - listitem [ref=e138]:
+            - link "Overview" [ref=e139] [cursor=pointer]:
+              - /url: /api/docs/guides/realtime
+          - listitem [ref=e141]:
+            - link "Voice agents" [ref=e142] [cursor=pointer]:
+              - /url: /api/docs/guides/voice-agents
+      - generic [ref=e144]:
+        - heading "Specialized models" [level=3] [ref=e145]
+        - list [ref=e146]:
+          - listitem [ref=e147]:
+            - link "Deep research" [ref=e148] [cursor=pointer]:
+              - /url: /api/docs/guides/deep-research
+          - listitem [ref=e150]:
+            - link "Embeddings" [ref=e151] [cursor=pointer]:
+              - /url: /api/docs/guides/embeddings
+          - listitem [ref=e153]:
+            - link "Moderation" [ref=e154] [cursor=pointer]:
+              - /url: /api/docs/guides/moderation
+    - main [ref=e156]:
+      - generic [ref=e158]:
+        - generic [ref=e159]:
+          - navigation [ref=e161]:
+            - list [ref=e165]:
+              - listitem [ref=e166]:
+                - link "Flagship models" [ref=e167] [cursor=pointer]:
+                  - /url: "#text-tokens"
+              - listitem [ref=e168]:
+                - link "Multimodal models" [ref=e169] [cursor=pointer]:
+                  - /url: "#image-tokens"
+              - listitem [ref=e170]:
+                - link "Tools" [ref=e171] [cursor=pointer]:
+                  - /url: "#built-in-tools"
+              - listitem [ref=e172]:
+                - link "Specialized models" [ref=e173] [cursor=pointer]:
+                  - /url: "#specialized-models"
+              - listitem [ref=e174]:
+                - link "Finetuning" [ref=e175] [cursor=pointer]:
+                  - /url: "#fine-tuning"
+          - button "Copy Page" [ref=e177] [cursor=pointer]
+        - generic [ref=e182]:
+          - heading "Pricing" [level=1] [ref=e186]
+          - article [ref=e187]:
+            - generic [ref=e188]:
+              - generic [ref=e189]:
+                - heading [level=2] [ref=e191] [cursor=pointer]:
+                  - paragraph [ref=e192]: Flagship models
+                - generic [ref=e194]: Our latest models
+                - generic [ref=e195]: Prices per 1M tokens.
+              - generic [ref=e196]:
+                - group "Content switcher" [ref=e199]:
+                  - radio "Standard" [checked] [ref=e200] [cursor=pointer]
+                  - radio "Batch" [ref=e201] [cursor=pointer]
+                  - radio "Flex" [ref=e204] [cursor=pointer]
+                  - radio "Fast mode" [ref=e207] [cursor=pointer]
+                - generic [ref=e213]:
+                  - table [ref=e216]:
+                    - rowgroup [ref=e227]:
+                      - row [ref=e228]:
+                        - columnheader [ref=e229]
+                        - columnheader [ref=e230]:
+                          - generic "Short context pricing details" [ref=e231]: Short context
+                        - columnheader [ref=e233]:
+                          - generic "Long context pricing details" [ref=e234]: Long context
+                      - row [ref=e236]:
+                        - columnheader "Model" [ref=e237]
+                        - columnheader "Input" [ref=e238]
+                        - columnheader "Cached input" [ref=e239]
+                        - columnheader [ref=e240]:
+                          - generic "Cache writes pricing details" [ref=e241]: Cache writes
+                        - columnheader [ref=e243]:
+                          - generic "Output pricing details" [ref=e244]: Output
+                        - columnheader "Input" [ref=e246]
+                        - columnheader "Cached input" [ref=e247]
+                        - columnheader [ref=e248]:
+                          - generic "Cache writes pricing details" [ref=e249]: Cache writes
+                        - columnheader [ref=e251]:
+                          - generic "Output pricing details" [ref=e252]: Output
+                    - rowgroup [ref=e254]:
+                      - row [ref=e255]:
+                        - cell "gpt-5.6-sol" [ref=e256]
+                        - cell "$5.00" [ref=e258]
+                        - cell "$0.50" [ref=e260]
+                        - cell "$6.25" [ref=e262]
+                        - cell "$30.00" [ref=e264]
+                        - cell "$10.00" [ref=e266]
+                        - cell "$1.00" [ref=e268]
+                        - cell "$12.50" [ref=e270]
+                        - cell "$45.00" [ref=e272]
+                      - row [ref=e274]:
+                        - cell "gpt-5.6-terra" [ref=e275]
+                        - cell "$2.00" [ref=e277]
+                        - cell "$0.20" [ref=e279]
+                        - cell "$2.50" [ref=e281]
+                        - cell "$12.00" [ref=e283]
+                        - cell "$4.00" [ref=e285]
+                        - cell "$0.40" [ref=e287]
+                        - cell "$5.00" [ref=e289]
+                        - cell "$18.00" [ref=e291]
+                      - row [ref=e293]:
+                        - cell "gpt-5.6-luna" [ref=e294]
+                        - cell "$0.20" [ref=e296]
+                        - cell "$0.02" [ref=e298]
+                        - cell "$0.25" [ref=e300]
+                        - cell "$1.20" [ref=e302]
+                        - cell "$0.40" [ref=e304]
+                        - cell "$0.04" [ref=e306]
+                        - cell "$0.50" [ref=e308]
+                        - cell "$1.80" [ref=e310]
+                      - row [ref=e312]:
+                        - cell "gpt-5.5" [ref=e313]
+                        - cell "$5.00" [ref=e315]
+                        - cell "$0.50" [ref=e317]
+                        - cell "-" [ref=e319]
+                        - cell "$30.00" [ref=e321]
+                        - cell "$10.00" [ref=e323]
+                        - cell "$1.00" [ref=e325]
+                        - cell "-" [ref=e327]
+                        - cell "$45.00" [ref=e329]
+                      - row [ref=e331]:
+                        - cell "gpt-5.5-pro" [ref=e332]
+                        - cell "$30.00" [ref=e334]
+                        - cell "-" [ref=e336]
+                        - cell "-" [ref=e338]
+                        - cell "$180.00" [ref=e340]
+                        - cell "$60.00" [ref=e342]
+                        - cell "-" [ref=e344]
+                        - cell "-" [ref=e346]
+                        - cell "$270.00" [ref=e348]
+                      - row [ref=e350]:
+                        - cell "gpt-5.4" [ref=e351]
+                        - cell "$2.50" [ref=e353]
+                        - cell "$0.25" [ref=e355]
+                        - cell "-" [ref=e357]
+                        - cell "$15.00" [ref=e359]
+                        - cell "$5.00" [ref=e361]
+                        - cell "$0.50" [ref=e363]
+                        - cell "-" [ref=e365]
+                        - cell "$22.50" [ref=e367]
+                      - row [ref=e369]:
+                        - cell "gpt-5.4-mini" [ref=e370]
+                        - cell "$0.75" [ref=e372]
+                        - cell "$0.075" [ref=e374]
+                        - cell "-" [ref=e376]
+                        - cell "$4.50" [ref=e378]
+                        - cell "-" [ref=e380]
+                        - cell "-" [ref=e382]
+                        - cell "-" [ref=e384]
+                        - cell "-" [ref=e386]
+                      - row [ref=e388]:
+                        - cell "gpt-5.4-nano" [ref=e389]
+                        - cell "$0.20" [ref=e391]
+                        - cell "$0.02" [ref=e393]
+                        - cell "-" [ref=e395]
+                        - cell "$1.25" [ref=e397]
+                        - cell "-" [ref=e399]
+                        - cell "-" [ref=e401]
+                        - cell "-" [ref=e403]
+                        - cell "-" [ref=e405]
+                      - row [ref=e407]:
+                        - cell "gpt-5.4-pro" [ref=e408]
+                        - cell "$30.00" [ref=e410]
+                        - cell "-" [ref=e412]
+                        - cell "-" [ref=e414]
+                        - cell "$180.00" [ref=e416]
+                        - cell "$60.00" [ref=e418]
+                        - cell "-" [ref=e420]
+                        - cell "-" [ref=e422]
+                        - cell "$270.00" [ref=e424]
+                  - generic [ref=e427]:
+                    - text: Regional processing (data residency) endpoints are charged a 10% uplift for models released on or after March 5, 2026, that are eligible for data residency. See our
+                    - link "Your data" [ref=e428] [cursor=pointer]:
+                      - /url: /api/docs/guides/your-data
+                    - text: guide for supported regions and processing details.
+                    - link "OpenAI models in Amazon Bedrock" [ref=e429] [cursor=pointer]:
+                      - /url: /api/docs/guides/amazon-bedrock
+                    - text: are billed through AWS and may differ from direct OpenAI pricing.Priority processing was renamed Fast mode on July 30, 2026. You can use either
+                    - code [ref=e430]: "service_tier: \"priority\""
+                    - text: or
+                    - code [ref=e431]: "service_tier: \"fast\""
+                    - text: in your API requests.
+                    - link "Learn more about Fast mode" [ref=e432] [cursor=pointer]:
+                      - /url: /api/docs/guides/fast-mode
+                    - text: .
+                  - button "All models" [ref=e434] [cursor=pointer]
+            - heading [level=2] [ref=e443] [cursor=pointer]:
+              - paragraph [ref=e444]: Multimodal models
+            - heading [level=3] [ref=e448] [cursor=pointer]:
+              - paragraph [ref=e449]: Realtime and audio generation models
+            - paragraph [ref=e451]: Prices per 1M tokens unless noted.
+            - generic [ref=e453]:
+              - table [ref=e455]:
+                - rowgroup [ref=e456]:
+                  - row [ref=e457]:
+                    - columnheader "Model" [ref=e458]
+                    - columnheader "Modality" [ref=e459]
+                    - columnheader "Input" [ref=e460]
+                    - columnheader "Cached input" [ref=e461]
+                    - columnheader "Output / cost" [ref=e462]
+                - rowgroup [ref=e463]:
+                  - row [ref=e464]:
+                    - cell "gpt-realtime-2.1" [ref=e465]
+                    - cell "Audio" [ref=e466]
+                    - cell "$32.00" [ref=e467]
+                    - cell "$0.40" [ref=e468]
+                    - cell "$64.00" [ref=e469]
+                  - row [ref=e470]:
+                    - cell "Text" [ref=e471]
+                    - cell "$4.00" [ref=e472]
+                    - cell "$0.40" [ref=e473]
+                    - cell "$24.00" [ref=e474]
+                  - row [ref=e475]:
+                    - cell "Image" [ref=e476]
+                    - cell "$5.00" [ref=e477]
+                    - cell "$0.50" [ref=e478]
+                    - cell "-" [ref=e479]
+                  - row [ref=e480]:
+                    - cell "gpt-realtime-2.1-mini" [ref=e481]
+                    - cell "Audio" [ref=e482]
+                    - cell "$10.00" [ref=e483]
+                    - cell "$0.30" [ref=e484]
+                    - cell "$20.00" [ref=e485]
+                  - row [ref=e486]:
+                    - cell "Text" [ref=e487]
+                    - cell "$0.60" [ref=e488]
+                    - cell "$0.06" [ref=e489]
+                    - cell "$2.40" [ref=e490]
+                  - row [ref=e491]:
+                    - cell "Image" [ref=e492]
+                    - cell "$0.80" [ref=e493]
+                    - cell "$0.08" [ref=e494]
+                    - cell "-" [ref=e495]
+                  - row [ref=e496]:
+                    - cell "gpt-realtime-translate" [ref=e497]
+                    - cell "Audio" [ref=e498]
+                    - cell "-" [ref=e499]
+                    - cell "-" [ref=e500]
+                    - cell "$0.034 / minute" [ref=e501]
+                  - row [ref=e502]:
+                    - cell "gpt-live-transcribe" [ref=e503]
+                    - cell "Audio" [ref=e504]
+                    - cell "-" [ref=e505]
+                    - cell "-" [ref=e506]
+                    - cell "$0.017 / minute" [ref=e507]
+                  - row [ref=e508]:
+                    - cell "gpt-realtime-whisper" [ref=e509]
+                    - cell "Audio" [ref=e510]
+                    - cell "-" [ref=e511]
+                    - cell "-" [ref=e512]
+                    - cell "$0.017 / minute" [ref=e513]
+              - button "All models" [ref=e515] [cursor=pointer]
+            - generic [ref=e521]:
+              - generic [ref=e522]:
+                - heading [level=3] [ref=e524] [cursor=pointer]:
+                  - paragraph [ref=e525]: Image generation models
+                - generic [ref=e527]: Prices per 1M tokens.
+              - generic [ref=e528]:
+                - group "Content switcher" [ref=e531]:
+                  - radio "Standard" [checked] [ref=e532] [cursor=pointer]
+                  - radio "Batch" [ref=e533] [cursor=pointer]
+                - generic [ref=e537]:
+                  - generic [ref=e538]:
+                    - text: For image generation cost estimates, use the
+                    - link "calculator" [ref=e539] [cursor=pointer]:
+                      - /url: /api/docs/guides/image-generation#calculating-costs
+                    - text: in the image generation guide.
+                  - generic [ref=e541]:
+                    - table [ref=e543]:
+                      - rowgroup [ref=e544]:
+                        - row [ref=e545]:
+                          - columnheader "Model" [ref=e546]
+                          - columnheader [ref=e547]:
+                            - generic "Modality pricing details" [ref=e548]: Modality
+                          - columnheader "Input" [ref=e550]
+                          - columnheader "Cached input" [ref=e551]
+                          - columnheader "Output" [ref=e552]
+                      - rowgroup [ref=e553]:
+                        - row [ref=e554]:
+                          - cell "gpt-image-2" [ref=e555]
+                          - cell "Image" [ref=e556]
+                          - cell "$8.00" [ref=e557]
+                          - cell "$2.00" [ref=e558]
+                          - cell "$30.00" [ref=e559]
+                        - row [ref=e560]:
+                          - cell "Text" [ref=e561]
+                          - cell "$5.00" [ref=e562]
+                          - cell "$1.25" [ref=e563]
+                          - cell "-" [ref=e564]
+                        - row [ref=e565]:
+                          - cell "gpt-image-1.5" [ref=e566]
+                          - cell "Image" [ref=e567]
+                          - cell "$8.00" [ref=e568]
+                          - cell "$2.00" [ref=e569]
+                          - cell "$32.00" [ref=e570]
+                        - row [ref=e571]:
+                          - cell "Text" [ref=e572]
+                          - cell "$5.00" [ref=e573]
+                          - cell "$1.25" [ref=e574]
+                          - cell "$10.00" [ref=e575]
+                        - row [ref=e576]:
+                          - cell "gpt-image-1-mini" [ref=e577]
+                          - cell "Image" [ref=e578]
+                          - cell "$2.50" [ref=e579]
+                          - cell "$0.25" [ref=e580]
+                          - cell "$8.00" [ref=e581]
+                        - row [ref=e582]:
+                          - cell "Text" [ref=e583]
+                          - cell "$2.00" [ref=e584]
+                          - cell "$0.20" [ref=e585]
+                          - cell "-" [ref=e586]
+                    - button "All models" [ref=e588] [cursor=pointer]
+            - generic [ref=e594]:
+              - generic [ref=e595]:
+                - heading [level=3] [ref=e597] [cursor=pointer]:
+                  - paragraph [ref=e598]: Video generation models
+                - generic [ref=e600]: Prices per second.
+              - generic [ref=e601]:
+                - group "Content switcher" [ref=e604]:
+                  - radio "Standard" [checked] [ref=e605] [cursor=pointer]
+                  - radio "Batch" [ref=e606] [cursor=pointer]
+                - table [ref=e614]:
+                  - rowgroup [ref=e615]:
+                    - row [ref=e616]:
+                      - columnheader "Model" [ref=e617]
+                      - columnheader "Size" [ref=e618]
+                      - columnheader "Portrait" [ref=e619]
+                      - columnheader "Landscape" [ref=e620]
+                      - columnheader "Price per second" [ref=e621]
+                  - rowgroup [ref=e622]:
+                    - row [ref=e623]:
+                      - cell "sora-2" [ref=e624]
+                      - cell "720p" [ref=e625]
+                      - cell "720x1280" [ref=e626]
+                      - cell "1280x720" [ref=e627]
+                      - cell "$0.10" [ref=e628]
+                    - row [ref=e629]:
+                      - cell "sora-2-pro" [ref=e630]
+                      - cell "720p" [ref=e631]
+                      - cell "720x1280" [ref=e632]
+                      - cell "1280x720" [ref=e633]
+                      - cell "$0.30" [ref=e634]
+                    - row [ref=e635]:
+                      - cell "1024p" [ref=e636]
+                      - cell "1024x1792" [ref=e637]
+                      - cell "1792x1024" [ref=e638]
+                      - cell "$0.50" [ref=e639]
+                    - row [ref=e640]:
+                      - cell "1080p" [ref=e641]
+                      - cell "1080x1920" [ref=e642]
+                      - cell "1920x1080" [ref=e643]
+                      - cell "$0.70" [ref=e644]
+            - heading [level=3] [ref=e647] [cursor=pointer]:
+              - paragraph [ref=e648]: Transcription models
+            - paragraph [ref=e650]: Prices per 1M tokens unless noted.
+            - generic [ref=e652]:
+              - table [ref=e654]:
+                - rowgroup [ref=e655]:
+                  - row [ref=e656]:
+                    - columnheader "Model" [ref=e657]
+                    - columnheader "Use case" [ref=e658]
+                    - columnheader "Input" [ref=e659]
+                    - columnheader "Output" [ref=e660]
+                    - columnheader "Estimated cost" [ref=e661]
+                - rowgroup [ref=e662]:
+                  - row [ref=e663]:
+                    - cell "gpt-transcribe" [ref=e664]
+                    - cell "Transcription" [ref=e665]
+                    - cell "-" [ref=e666]
+                    - cell "-" [ref=e667]
+                    - cell "$0.0045 / minute" [ref=e668]
+                  - row [ref=e669]:
+                    - cell "gpt-live-transcribe" [ref=e670]
+                    - cell "Live transcription" [ref=e671]
+                    - cell "-" [ref=e672]
+                    - cell "-" [ref=e673]
+                    - cell "$0.017 / minute" [ref=e674]
+                  - row [ref=e675]:
+                    - cell "gpt-4o-transcribe" [ref=e676]
+                    - cell "Transcription" [ref=e677]
+                    - cell "$2.50" [ref=e678]
+                    - cell "$10.00" [ref=e679]
+                    - cell "$0.006 / minute" [ref=e680]
+                  - row [ref=e681]:
+                    - cell "gpt-4o-mini-transcribe" [ref=e682]
+                    - cell "Transcription" [ref=e683]
+                    - cell "$1.25" [ref=e684]
+                    - cell "$5.00" [ref=e685]
+                    - cell "$0.003 / minute" [ref=e686]
+              - button "All models" [ref=e688] [cursor=pointer]
+            - heading [level=2] [ref=e696] [cursor=pointer]:
+              - paragraph [ref=e697]: Tools
+            - table [ref=e702]:
+              - rowgroup [ref=e703]:
+                - row [ref=e704]:
+                  - columnheader "Tool" [ref=e705]
+                  - columnheader "Details" [ref=e706]
+                  - columnheader "Pricing" [ref=e707]
+              - rowgroup [ref=e708]:
+                - row [ref=e709]:
+                  - cell "Web search" [ref=e710]
+                  - cell "Web search (all models)" [ref=e711]
+                  - cell [ref=e712]:
+                    - generic [ref=e713]: $10.00 / 1k calls+ Search content tokens billed at model rates.
+                - row [ref=e714]:
+                  - cell "Image Web search (all models)" [ref=e715]
+                  - cell [ref=e716]:
+                    - generic [ref=e717]: $10.00 / 1k calls+ Search content tokens billed at model rates.
+                - row [ref=e718]:
+                  - cell [ref=e719]:
+                    - generic [ref=e720]:
+                      - text: Web search preview (reasoning models, including
+                      - code [ref=e721]: gpt-5
+                      - text: ","
+                      - code [ref=e722]: o-series
+                      - text: )
+                  - cell [ref=e723]:
+                    - generic [ref=e724]: $10.00 / 1k calls+ Search content tokens billed at model rates.
+                - row [ref=e725]:
+                  - cell "Web search preview (non-reasoning models)" [ref=e726]
+                  - cell [ref=e727]:
+                    - generic [ref=e728]: $25.00 / 1k calls+ Search content tokens are free.
+                - row [ref=e729]:
+                  - cell "Containers" [ref=e730]
+                  - cell "Hosted Shell and Code Interpreter" [ref=e731]
+                  - cell "1 GB $0.03, 4 GB $0.12, 16 GB $0.48, 64 GB $1.92 per 20-minute session per container." [ref=e733]
+                - row [ref=e734]:
+                  - cell "File search" [ref=e735]
+                  - cell "Storage" [ref=e736]
+                  - cell "$0.10 / GB per day (1 GB free)" [ref=e737]
+                - row [ref=e738]:
+                  - cell "Tool call" [ref=e739]
+                  - cell "$2.50 / 1k calls" [ref=e740]
+                - row [ref=e741]:
+                  - cell "Agent Kit" [ref=e742]
+                  - cell "ChatKit file and image upload storage" [ref=e743]
+                  - cell "$0.10 / GB-day after 1 GB free per account per month" [ref=e744]
+            - generic [ref=e745]:
+              - text: Tokens used for built-in tools are billed at the chosen model's per-token rates. GB refers to binary gigabytes (also known as gibibytes), where 1 GB is 2^30 bytes. Web search content tokens are tokens retrieved from the search index and fed to the model alongside your prompt to generate an answer. For
+              - code [ref=e746]: gpt-4o-mini
+              - text: and
+              - code [ref=e747]: gpt-4.1-mini
+              - text: with the non-preview web search tool, search content tokens are billed as a fixed block of 8,000 input tokens per call. File search tool call pricing applies to the Responses API only. Container pricing includes
+              - link "Hosted Shell" [ref=e748] [cursor=pointer]:
+                - /url: /api/docs/guides/tools-shell#hosted-shell-quickstart
+              - text: and
+              - link "Code Interpreter" [ref=e749] [cursor=pointer]:
+                - /url: /api/docs/guides/tools-code-interpreter
+              - text: . Eligible container sessions will be billed by the minute, with a 5-minute minimum per session. Responses API, Chat Completions API, Realtime API, Batch API, and Assistants API are not priced separately. Tokens are billed at the chosen model's input and output rates.
+            - generic [ref=e750]:
+              - generic [ref=e751]:
+                - heading [level=2] [ref=e753] [cursor=pointer]:
+                  - paragraph [ref=e754]: Specialized models
+                - generic [ref=e756]: Prices per 1M tokens.
+              - generic [ref=e757]:
+                - group "Content switcher" [ref=e760]:
+                  - radio "Standard" [checked] [ref=e761] [cursor=pointer]
+                  - radio "Fast mode" [ref=e762] [cursor=pointer]
+                - generic [ref=e768]:
+                  - table [ref=e770]:
+                    - rowgroup [ref=e771]:
+                      - row [ref=e772]:
+                        - columnheader "Category" [ref=e773]
+                        - columnheader "Model" [ref=e774]
+                        - columnheader "Input" [ref=e775]
+                        - columnheader "Cached input" [ref=e776]
+                        - columnheader "Output" [ref=e777]
+                    - rowgroup [ref=e778]:
+                      - row [ref=e779]:
+                        - cell "ChatGPT" [ref=e780]
+                        - cell "chat-latest" [ref=e781]
+                        - cell "$5.00" [ref=e782]
+                        - cell "$0.50" [ref=e783]
+                        - cell "$30.00" [ref=e784]
+                      - row [ref=e785]:
+                        - cell "Codex" [ref=e786]
+                        - cell "gpt-5.3-codex" [ref=e787]
+                        - cell "$1.75" [ref=e788]
+                        - cell "$0.175" [ref=e789]
+                        - cell "$14.00" [ref=e790]
+                      - row [ref=e791]:
+                        - cell "Cyber" [ref=e792]
+                        - cell "gpt-5.4-cyber" [ref=e793]
+                        - cell "-" [ref=e794]
+                        - cell "-" [ref=e795]
+                        - cell "-" [ref=e796]
+                  - button "All models" [ref=e798] [cursor=pointer]
+            - generic [ref=e804]:
+              - generic [ref=e805]:
+                - heading [level=2] [ref=e807] [cursor=pointer]:
+                  - paragraph [ref=e808]: Finetuning
+                - generic [ref=e810]: Prices per 1M tokens.
+              - generic [ref=e820]:
+                - paragraph [ref=e821]: OpenAI is winding down the fine-tuning platform. The platform is no longer accessible to new users, but existing users of the fine-tuning platform will be able to create training jobs for the coming months.
+                - paragraph [ref=e822]:
+                  - text: All fine-tuned models will remain available for inference until their base models are deprecated. The full timeline is
+                  - link "here" [ref=e823] [cursor=pointer]:
+                    - /url: /api/docs/deprecations#update-to-openais-self-serve-fine-tuning
+                  - text: .
+              - generic [ref=e824]:
+                - group "Content switcher" [ref=e827]:
+                  - radio "Standard" [checked] [ref=e828] [cursor=pointer]
+                  - radio "Batch" [ref=e829] [cursor=pointer]
+                - generic [ref=e835]:
+                  - table [ref=e836]:
+                    - rowgroup [ref=e837]:
+                      - row [ref=e838]:
+                        - columnheader "Model" [ref=e839]
+                        - columnheader "Training" [ref=e840]
+                        - columnheader "Input" [ref=e841]
+                        - columnheader "Cached input" [ref=e842]
+                        - columnheader "Output" [ref=e843]
+                    - rowgroup [ref=e844]:
+                      - row [ref=e845]:
+                        - cell "o4-mini-2025-04-16" [ref=e846]
+                        - cell "$100.00 / hour" [ref=e847]
+                        - cell "$4.00" [ref=e848]
+                        - cell "$1.00" [ref=e849]
+                        - cell "$16.00" [ref=e850]
+                      - row [ref=e851]:
+                        - cell [ref=e852]:
+                          - generic [ref=e853]: o4-mini-2025-04-16with data sharing
+                        - cell "$100.00 / hour" [ref=e854]
+                        - cell "$2.00" [ref=e855]
+                        - cell "$0.50" [ref=e856]
+                        - cell "$8.00" [ref=e857]
+                  - button "All models" [ref=e859] [cursor=pointer]
+            - generic [ref=e865]:
+              - text: Tokens used for model grading in reinforcement fine-tuning are billed at that model's per-token rate. Inference discounts are available if you enable data sharing when creating the fine-tune job.
+              - link "Learn more" [ref=e866] [cursor=pointer]:
+                - /url: https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai#h_c93188c569
+              - text: .
+      - navigation [ref=e869]:
+        - link "Next Model selection" [ref=e871] [cursor=pointer]:
+          - /url: /api/docs/guides/model-selection
+          - generic [ref=e872]:
+            - generic [ref=e873]: Next
+            - generic [ref=e874]: Model selection
+  - generic:
+    - button "Ask AI" [ref=e878] [cursor=pointer]
+    - dialog [ref=e880]:
+      - banner [ref=e881]:
+        - heading "Docs agent" [level=2] [ref=e882]
+        - generic [ref=e883]:
+          - button "Start a new docs agent chat" [ref=e884] [cursor=pointer]
+          - button "Close docs agent" [ref=e887] [cursor=pointer]
+      - paragraph [ref=e892]: Loading docs agent...

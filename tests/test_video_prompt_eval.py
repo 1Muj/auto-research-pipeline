@@ -54,6 +54,12 @@ def _write_artifact_dir(path: Path) -> None:
                         "title": "Motivation",
                         "bullets": ["Need inspectable PPT videos."],
                         "speaker_note": "This explains why inspection matters.",
+                        "visual_asset_preference": "procedural",
+                        "visual_asset_paths": [str(path / "selected.png")],
+                        "visual_asset_comparison": {
+                            "winner": "procedural",
+                            "reason": "The rejected image is not used.",
+                        },
                     }
                 ],
                 "subtitles": [
@@ -69,7 +75,28 @@ def _write_artifact_dir(path: Path) -> None:
         encoding="utf-8",
     )
     (path / "metrics.json").write_text(
-        json.dumps({"judge_overall_score": 0.8, "slide_count": 1}),
+        json.dumps(
+            {
+                "judge_overall_score": 0.8,
+                "slide_count": 1,
+                "generated_image_count": 0,
+                "paper_figure_count": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (path / "image_generation.json").write_text(
+        json.dumps([{"slide_index": 1, "ok": False, "error": "image rejected: garbled text"}]),
+        encoding="utf-8",
+    )
+    (path / "asset_manifest.json").write_text(
+        json.dumps(
+            {
+                "shot_count": 3,
+                "strategy_counts": {"kinetic_text": 3},
+                "repairable_shots": ["s01-01"],
+            }
+        ),
         encoding="utf-8",
     )
     (path / "slides.md").write_text(
@@ -97,6 +124,13 @@ def test_prompt_evaluation_writes_prompt_report(tmp_path: Path) -> None:
     assert report["evaluation"]["classification"] == "not_run"
     assert "strict multimodal evaluator" in report["judge_prompt"]
     assert "content_script_quality" in report["judge_prompt"]
+    assert '"accepted_generated_images": 0' in report["judge_prompt"]
+    assert '"rejected_candidate_images": 1' in report["judge_prompt"]
+    assert '"unresolved_final_visual_failures": 0' in report["judge_prompt"]
+    assert '"selected.png"' in report["judge_prompt"]
+    assert '"intentionally_skipped_generated_images": 0' in report["judge_prompt"]
+    assert "cannot receive an excellent visual-quality score" in report["judge_prompt"]
+    assert "Never cite a rejected_candidate_sample as evidence" in report["judge_prompt"]
     assert "prompt_package" in report
     assert "system_prompt" in report["prompt_package"]
     assert report["prompt_package"]["dataset_mapping"][0]["name"] == "PresentEval"

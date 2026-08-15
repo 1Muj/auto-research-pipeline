@@ -4,13 +4,21 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 import auto_research.video_pipeline as video_pipeline
 from auto_research.video_pipeline import (
     _clean_vision_response_content,
     _call_json_model,
     _call_text_model,
     _enforce_source_storyboard_coverage,
+    _enrich_short_speaker_notes,
+    _image_model_config,
+    _build_model_slides_in_batches,
+    _model_slide_payload_issues,
+    _normalize_slide,
     _scene_asset_manifest,
+    _scene_media_split_layout,
     _text_model_provider,
     _write_pipeline_checkpoint,
     build_scene_timeline,
@@ -19,8 +27,241 @@ from auto_research.video_pipeline import (
     media_duration_seconds,
     mux_audio_into_video,
     revise_slides,
+    sanitize_public_slides,
     synthesize_tts_segments,
 )
+
+
+def test_scene_media_split_layout_keeps_text_off_the_image() -> None:
+    for media_left in (True, False):
+        media, text = _scene_media_split_layout(1280, 720, media_left=media_left)
+        mx1, my1, mx2, my2 = media
+        tx1, ty1, tx2, ty2 = text
+
+        assert mx2 <= tx1 or tx2 <= mx1
+        assert my1 >= 0 and my2 <= 720 - 146
+        assert ty1 >= 0 and ty2 <= 720 - 146
+        assert abs(((mx2 - mx1) / (my2 - my1)) - (16 / 9)) < 0.03
+
+
+def test_model_storyboard_batches_large_outputs(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def fake_json_model(prompt: str):
+        calls.append(prompt)
+        if '"outline"' in prompt:
+            return {
+                "outline": [
+                    {"index": i, "title": f"Topic {i}", "purpose": f"Job {i}", "visual_kind": "image"}
+                    for i in range(1, 8)
+                ]
+            }
+        marker = "Produce exactly "
+        count = int(prompt.split(marker, 1)[1].split(" slides", 1)[0])
+        start = int(prompt.split("Write slides ", 1)[1].split(" through", 1)[0])
+        return {
+            "slides": [
+                {
+                    "index": i,
+                    "title": f"Topic {i}",
+                    "purpose": f"Explain source fact {i}",
+                    "bullets": [f"Claim {i} is grounded in the source.", f"Evidence {i} explains its consequence."],
+                    "speaker_note": f"Explanation {i}",
+                    "visual_prompt": f"Show the mechanism for source fact {i}",
+                    "visual_kind": "image",
+                    "visual_caption": f"Source fact {i} and its consequence",
+                    "visual_items": [f"Source state {i}", f"Result state {i}"],
+                    "visual_table": [],
+                    "animation_labels": {
+                        "primary": f"Source state {i}",
+                        "secondary": f"Transformation {i}",
+                        "result": f"Result {i}",
+                    },
+                    "scene_direction": {
+                        "layout": "editorial",
+                        "entrance": "fade_up",
+                        "emphasis": f"Source fact {i}",
+                    },
+                }
+                for i in range(start, start + count)
+            ]
+        }
+
+    monkeypatch.setattr(video_pipeline, "_call_json_model", fake_json_model)
+    slides = _build_model_slides_in_batches(
+        {"kind": "paper", "title": "Test", "text": "Source facts"},
+        target_slides=7,
+        batch_size=3,
+    )
+
+    assert slides is not None
+    assert [slide["index"] for slide in slides] == list(range(1, 8))
+    assert len(calls) == 4
+
+
+def test_model_only_normalization_never_builds_a_default_table() -> None:
+    slide = _normalize_slide(
+        1,
+        {
+            "title": "Grounded claim",
+            "purpose": "Explain one source claim",
+            "bullets": ["The source states the claim.", "The evidence explains its impact."],
+            "speaker_note": "The source states the claim and explains why it matters.",
+            "visual_prompt": "Show the claim and its consequence",
+            "visual_kind": "image",
+            "visual_caption": "The claim changes the final outcome",
+            "visual_items": ["Source claim", "Observed outcome"],
+            "visual_table": [],
+            "animation_labels": {
+                "primary": "Source claim",
+                "secondary": "Evidence connection",
+                "result": "Observed outcome",
+            },
+            "scene_direction": {"layout": "editorial", "entrance": "fade_up", "emphasis": "Source claim"},
+        },
+        model_text_only=True,
+    )
+
+    assert slide["visual_table"] == []
+    assert slide["text_provenance"]["visual_table"] == "model_not_requested"
+
+
+def test_repeated_model_table_roles_are_rejected() -> None:
+    issues = _model_slide_payload_issues(
+        [
+            {
+                "index": 1,
+                "title": "Evidence",
+                "purpose": "Compare source evidence",
+                "bullets": ["First finding is supported.", "Second finding is supported."],
+                "speaker_note": "The paper reports two findings with different implications.",
+                "visual_prompt": "Compare both findings",
+                "visual_kind": "table",
+                "visual_caption": "Two findings play different roles",
+                "visual_items": ["First finding", "Second finding"],
+                "visual_table": [
+                    ["Claim", "Evidence", "Role"],
+                    ["First", "Result A", "Supports the current explanation"],
+                    ["Second", "Result B", "Supports the current explanation"],
+                ],
+                "animation_labels": {"primary": "Claims", "secondary": "Evidence", "result": "Implications"},
+                "scene_direction": {"layout": "evidence_grid", "entrance": "fade_up", "emphasis": "Result A"},
+            }
+        ],
+        expected_count=1,
+    )
+
+    assert any("repeats the same text" in issue for issue in issues)
+    assert any("forbidden template text" in issue for issue in issues)
+
+
+def test_model_narration_must_preserve_exact_factual_numbers() -> None:
+    issues = _model_slide_payload_issues(
+        [
+            {
+                "index": 1,
+                "title": "Benchmark of 101 paired papers",
+                "purpose": "Describe the benchmark scale",
+                "bullets": ["The benchmark contains 101 papers.", "Each paper has a paired video."],
+                "speaker_note": "The benchmark contains one hundred papers paired with presentation videos.",
+                "visual_prompt": "Show paired paper and video records",
+                "visual_kind": "image",
+                "visual_caption": "Paired benchmark records",
+                "visual_items": ["Research papers", "Presentation videos"],
+                "visual_table": [],
+                "animation_labels": {
+                    "primary": "Research papers",
+                    "secondary": "Pairing process",
+                    "result": "Benchmark records",
+                },
+                "scene_direction": {
+                    "layout": "data_wall",
+                    "entrance": "fade_up",
+                    "emphasis": "101 paired papers",
+                },
+            }
+        ],
+        expected_count=1,
+    )
+
+    assert any("preserve exact factual numbers: 101" in issue for issue in issues)
+
+
+def test_model_only_sanitizer_raises_instead_of_writing_placeholder_text() -> None:
+    with pytest.raises(RuntimeError, match="lost required text fields"):
+        sanitize_public_slides([{"index": 1, "text_generation_mode": "model_only"}])
+
+
+def test_short_narration_is_enriched_with_source_grounded_model_output(monkeypatch) -> None:
+    calls = 0
+
+    def fake_json_model(_prompt: str):
+        nonlocal calls
+        calls += 1
+        assert "exactly 5 complete sentences" in _prompt
+        return {
+            "slides": [
+                {
+                    "index": 1,
+                    "speaker_note": (
+                        "The system coordinates four specialized builders around one shared plan. "
+                        "The slide builder converts paper evidence into a visual structure, while the subtitle builder turns the explanation into timed segments. "
+                        "A grounding component then links each spoken claim to a visible region. "
+                        "This coordination matters because independently correct outputs can still produce an incoherent video when their timing and focus disagree."
+                    ),
+                }
+            ]
+        }
+
+    monkeypatch.setattr(video_pipeline, "_call_json_model", fake_json_model)
+    slides = _enrich_short_speaker_notes(
+        {"title": "PaperTalker", "text": "The source describes coordinated builders and temporal grounding."},
+        [{"index": 1, "title": "Architecture", "speaker_note": "Four builders work together."}],
+        min_words=55,
+        max_words=90,
+    )
+
+    assert calls == 1
+    assert slides[0]["narration_depth_mode"] == "model_enriched"
+    assert slides[0]["narration_depth_words"] >= 55
+
+
+def test_sufficient_narration_does_not_call_enrichment_model(monkeypatch) -> None:
+    monkeypatch.setattr(
+        video_pipeline,
+        "_call_json_model",
+        lambda _prompt: pytest.fail("enrichment model should not be called"),
+    )
+    note = " ".join(f"word{i}" for i in range(70))
+
+    slides = _enrich_short_speaker_notes(
+        {"title": "Paper", "text": "Source"},
+        [{"index": 1, "speaker_note": note}],
+        min_words=70,
+        max_words=95,
+    )
+
+    assert slides[0]["speaker_note"] == note
+
+
+def test_last_narration_attempt_accepts_meaningful_soft_improvement(monkeypatch) -> None:
+    monkeypatch.setenv("AUTO_VIDEO_NARRATION_ENRICH_ATTEMPTS", "1")
+    candidate = " ".join(f"detail{i}" for i in range(60))
+    monkeypatch.setattr(
+        video_pipeline,
+        "_call_json_model",
+        lambda _prompt: {"slides": [{"index": 1, "speaker_note": candidate}]},
+    )
+
+    slides = _enrich_short_speaker_notes(
+        {"title": "Paper", "text": "Source evidence"},
+        [{"index": 1, "speaker_note": "Short original note with little detail."}],
+        min_words=70,
+        max_words=95,
+    )
+
+    assert slides[0]["narration_depth_mode"] == "model_enriched_soft"
+    assert slides[0]["narration_depth_words"] == 60
 
 
 def test_video_pipeline_prefers_deepseek_provider(monkeypatch) -> None:
@@ -36,6 +277,53 @@ def test_video_pipeline_can_force_deepseek_when_lumid_is_also_loaded(monkeypatch
     monkeypatch.setenv("AUTO_VIDEO_TEXT_PROVIDER", "deepseek")
 
     assert _text_model_provider() == "deepseek"
+
+
+def test_dedicated_openai_image_provider_does_not_replace_lumid_text(monkeypatch) -> None:
+    monkeypatch.setenv("LUM_API_KEY", "lumid-key")
+    monkeypatch.setenv("LUMID_BASE_URL", "https://lumid.example/v1")
+    monkeypatch.setenv("LUMID_MODEL", "qwen-text")
+    monkeypatch.setenv("OPENAI_IMAGE_API_KEY", "openai-image-key")
+    monkeypatch.setenv("OPENAI_IMAGE_BASE_URL", "https://api.openai.example/v1")
+    monkeypatch.setenv("OPENAI_IMAGE_MODEL", "gpt-image-2")
+
+    assert _text_model_provider() == "lumid"
+    assert _image_model_config() == (
+        "openai-image-key",
+        "https://api.openai.example/v1",
+        "gpt-image-2",
+        "openai",
+        "1536x864",
+    )
+
+
+def test_openai_image_request_uses_supported_fields(tmp_path: Path, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setenv("OPENAI_IMAGE_API_KEY", "openai-image-key")
+    monkeypatch.setenv("AUTO_VIDEO_IMAGE_ATTEMPTS", "1")
+
+    def fake_post(url: str, key: str, body: dict, timeout: float):
+        captured.update(url=url, key=key, body=body, timeout=timeout)
+        return {}, json.dumps({"data": [{"b64_json": "aGVhbHRoeQ=="}]}).encode()
+
+    monkeypatch.setattr(video_pipeline, "_post_bytes", fake_post)
+    out = tmp_path / "generated.png"
+
+    ok, error = video_pipeline._call_lumid_image("Generate an academic scene.", out)
+
+    assert ok is True
+    assert error == ""
+    assert out.read_bytes() == b"healthy"
+    assert captured["url"] == "https://api.openai.com/v1/images/generations"
+    assert captured["key"] == "openai-image-key"
+    assert captured["body"] == {
+        "model": "gpt-image-2",
+        "prompt": "Generate an academic scene.",
+        "n": 1,
+        "size": "1536x864",
+        "quality": "medium",
+        "output_format": "png",
+    }
 
 
 def test_text_model_retries_the_same_provider_before_fallback(monkeypatch) -> None:
@@ -200,6 +488,7 @@ def test_segment_tts_retries_a_transient_failed_sentence(tmp_path: Path, monkeyp
     monkeypatch.setenv("AUTO_VIDEO_TTS_TEMPO", "1.0")
     monkeypatch.setenv("AUTO_VIDEO_TTS_WORKERS", "1")
     monkeypatch.setenv("AUTO_VIDEO_TTS_SEGMENT_RETRIES", "3")
+    monkeypatch.setenv("AUTO_VIDEO_TTS_RECOVERY_DELAYS", "0")
     attempts = 0
 
     def flaky_tts_clip(_text: str, out: Path) -> tuple[bool, str]:

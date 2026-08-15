@@ -7,10 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from auto_research.video_pipeline import (
+    _scene_asset_manifest,
     _call_openai_compatible,
+    _enrich_short_speaker_notes,
     _json_from_model,
     _normalize_slide,
     build_slides,
+    build_scene_timeline,
     build_cursor_plan,
     build_subtitles,
     build_talker_plan,
@@ -56,6 +59,111 @@ def _read_json(path: Path, fallback: Any) -> Any:
 
 def _write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _existing_paths(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    paths: list[str] = []
+    for item in value:
+        path = str(item or "").strip()
+        if path and Path(path).is_file() and path not in paths:
+            paths.append(path)
+    return paths
+
+
+def _load_visual_asset_state(
+    artifact_dir: Path,
+    slides: list[dict[str, Any]],
+) -> dict[int, dict[str, Any]]:
+    """Recover validated visual choices before a model-guided storyboard rewrite."""
+    state: dict[int, dict[str, Any]] = {}
+    for position, slide in enumerate(slides, start=1):
+        index = int(slide.get("index") or position)
+        state[index] = {
+            "generated_paths": _existing_paths(slide.get("generated_image_paths")),
+            "source_paths": _existing_paths(slide.get("paper_figure_paths")),
+            "selected_order": _existing_paths(slide.get("visual_asset_paths")),
+            "preference": str(slide.get("visual_asset_preference") or ""),
+            "comparison": slide.get("visual_asset_comparison") or {},
+            "paper_validation": slide.get("paper_figure_validation") or [],
+        }
+
+    selections = _read_json(artifact_dir / "visual_asset_selection.json", [])
+    for item in selections if isinstance(selections, list) else []:
+        if not isinstance(item, dict):
+            continue
+        index = int(item.get("slide_index") or 0)
+        if index <= 0:
+            continue
+        entry = state.setdefault(index, {})
+        entry["generated_paths"] = _existing_paths(item.get("generated_paths")) or entry.get("generated_paths", [])
+        entry["source_paths"] = _existing_paths(item.get("source_paths")) or entry.get("source_paths", [])
+        entry["selected_order"] = _existing_paths(item.get("selected_order")) or entry.get("selected_order", [])
+        winner = str(item.get("winner") or "").casefold()
+        if winner == "generated":
+            entry["preference"] = "generated_scene"
+        elif winner == "source":
+            entry["preference"] = "paper_figure"
+        entry["comparison"] = {
+            "winner": winner,
+            "scores": item.get("scores") or {},
+            "reason": item.get("reason") or "",
+            "comparison_path": item.get("comparison_path") or "",
+        }
+
+    generations = _read_json(artifact_dir / "image_generation.json", [])
+    for item in generations if isinstance(generations, list) else []:
+        if not isinstance(item, dict) or not item.get("ok"):
+            continue
+        index = int(item.get("slide_index") or 0)
+        path = _existing_paths([item.get("path")])
+        if index > 0 and path:
+            entry = state.setdefault(index, {})
+            entry["generated_paths"] = list(dict.fromkeys([*entry.get("generated_paths", []), *path]))
+
+    assignments = _read_json(artifact_dir / "paper_figure_assignments.json", [])
+    for item in assignments if isinstance(assignments, list) else []:
+        if not isinstance(item, dict):
+            continue
+        index = int(item.get("slide_index") or 0)
+        paths = _existing_paths(item.get("paths"))
+        if index > 0 and paths:
+            entry = state.setdefault(index, {})
+            entry["source_paths"] = paths
+            entry["paper_validation"] = item.get("validation") or []
+    return state
+
+
+def _restore_visual_assets(
+    slides: list[dict[str, Any]],
+    asset_state: dict[int, dict[str, Any]],
+) -> int:
+    restored = 0
+    for position, slide in enumerate(slides, start=1):
+        index = int(slide.get("index") or position)
+        entry = asset_state.get(index) or {}
+        generated = _existing_paths(entry.get("generated_paths"))
+        source = _existing_paths(entry.get("source_paths"))
+        selected = _existing_paths(entry.get("selected_order"))
+        preference = str(entry.get("preference") or "")
+        if not selected:
+            selected = [*generated, *source] if preference != "paper_figure" else [*source, *generated]
+        if not selected:
+            continue
+        slide["generated_image_paths"] = generated
+        slide["paper_figure_paths"] = source
+        slide["visual_asset_paths"] = selected
+        slide["generated_image_path"] = selected[0]
+        slide["visual_asset_preference"] = preference or (
+            "paper_figure" if selected[0] in source else "generated_scene"
+        )
+        slide["visual_asset_comparison"] = entry.get("comparison") or {}
+        slide["paper_figure_validation"] = entry.get("paper_validation") or []
+        slide["visual_asset_mode"] = "generated_or_source"
+        slide["visual_generation_error"] = ""
+        restored += 1
+    return restored
 
 
 def _clean_text(text: Any) -> str:
@@ -149,7 +257,8 @@ Repair goals:
 - Give every slide a unique job in the story. No repeated bullets across slides.
 - Use specific, audience-friendly titles, not only "Motivation", "Core Idea", "Workflow", "Evidence", or "Limitations".
 - Each slide should have 2 or 3 short bullets, each under 18 words.
-- Speaker notes should be natural narration, 55 to 90 words per slide.
+- Speaker notes should be natural narration, 70 to 95 words in 3-5 complete sentences per slide.
+- Add source-grounded mechanism, evidence, implication, or limitation details instead of generic filler.
 - Remove garbled OCR, raw bibliography entries, raw table dumps, repeated citations, checkmark/cross symbol lists, and half sentences.
 - Preserve only source-grounded facts that are clear enough to explain.
 - Make narration refer to the slide's actual visual focus.
@@ -181,6 +290,7 @@ Source excerpt:
         revised = [*revised, *fallback[len(revised) :]]
     normalized = [_normalize_slide(i, item) for i, item in enumerate(revised[:target_slides], start=1)]
     cleaned = [_clean_slide(slide) for slide in normalized]
+    cleaned = _enrich_short_speaker_notes(source, cleaned)
     info["accepted"] = True
     info["returned_slide_count"] = len(revised)
     return cleaned, info
@@ -205,6 +315,7 @@ def repair_video_artifacts(
     storyboard = _read_json(artifact_dir / "storyboard.json", {})
     judge = _read_json(artifact_dir / "judge_feedback.json", {})
     slides = storyboard.get("slides") if isinstance(storyboard.get("slides"), list) else []
+    visual_asset_state = _load_visual_asset_state(artifact_dir, slides)
     cleaned_slides = [_clean_slide(slide) for slide in slides if isinstance(slide, dict)]
     if target_slides and target_slides > 0:
         desired_slide_count = max(1, int(target_slides))
@@ -230,6 +341,7 @@ def repair_video_artifacts(
     if len(cleaned_slides) < desired_slide_count:
         fallback = build_slides(source, max_slides=desired_slide_count, use_api=False)
         cleaned_slides = [*cleaned_slides, *fallback[len(cleaned_slides) : desired_slide_count]]
+    restored_visual_slide_count = _restore_visual_assets(cleaned_slides, visual_asset_state)
     subtitles = build_subtitles(cleaned_slides, seconds_per_slide=seconds_per_slide)
     cursor_plan = build_cursor_plan(subtitles, slides=cleaned_slides, source=source, out_dir=artifact_dir)
     talker = build_talker_plan(subtitles)
@@ -293,6 +405,9 @@ def repair_video_artifacts(
     if rendered and tts_result.get("ok") and tts_result.get("path"):
         audio_muxed = mux_audio_into_video(video_path, Path(str(tts_result["path"])))
     audio_stream_present = has_audio_stream(video_path)
+    scene_timeline = build_scene_timeline(source, cleaned_slides, subtitles)
+    asset_manifest = _scene_asset_manifest(scene_timeline)
+    _write_json(artifact_dir / "asset_manifest.json", asset_manifest)
     repair_report = {
         "mode": repair_mode,
         "video_rendered": rendered,
@@ -308,6 +423,10 @@ def repair_video_artifacts(
         "audio_stream_present": audio_stream_present,
         "slide_count": len(cleaned_slides),
         "subtitle_count": len(subtitles),
+        "restored_visual_slide_count": restored_visual_slide_count,
+        "visible_asset_shot_count": sum(
+            1 for shot in scene_timeline if str(shot.get("visual_asset_path") or "")
+        ),
         "removed_internal_markers": INTERNAL_MARKERS,
         "model_repair": model_repair_info,
         "evaluation_summary": _summarize_eval(evaluation),
@@ -328,6 +447,9 @@ def repair_video_artifacts(
                 "video_rendered": rendered,
                 "video_path": str(video_path) if rendered else "",
                 "eval_repair_mode": repair_mode,
+                "scene_shot_count": asset_manifest.get("shot_count", 0),
+                "visual_strategy_counts": asset_manifest.get("strategy_counts", {}),
+                "repair_restored_visual_slide_count": restored_visual_slide_count,
             }
         )
         _write_json(artifact_dir / "metrics.json", metrics)

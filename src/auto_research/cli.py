@@ -151,7 +151,7 @@ def video_build_cmd(
     use_image_api: bool = typer.Option(
         False,
         "--use-image-api",
-        help="Use Lumid qwen-image to generate slide visual assets",
+        help="Use OpenAI GPT Image to generate visual assets",
     ),
     use_tts: bool = typer.Option(
         False,
@@ -212,7 +212,7 @@ def video_demo_cmd(
     use_image_api: bool = typer.Option(
         False,
         "--use-image-api",
-        help="Use Lumid qwen-image to generate slide visual assets",
+        help="Use OpenAI GPT Image to generate visual assets",
     ),
     use_tts: bool = typer.Option(
         False,

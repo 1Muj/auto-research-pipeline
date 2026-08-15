@@ -28,7 +28,7 @@ cd /Users/muj666/Desktop/auto
 - `AUTO_VIDEO_RENDER_STYLE=scene`：标题、论文图、流程、数字和字幕作为独立图层，不显示完整 PPT 边框。
 - `qwen3.6-27b`：论文理解、脚本和 storyboard。
 - `qwen-omni`：图像相关性检查与视觉定位；失败时自动重试 2 次。
-- `qwen-image`：生成与当前论文内容相关的视觉素材。
+- `gpt-image-2`：生成与当前论文内容相关的 16:9 视觉素材。
 - `qwen-tts`：合成旁白并自动 mux 到最终 `video.mp4`。
 - 如果配置了 `DEEPSEEK_API_KEY`，Lumid 文本请求或 Omni 文字定位失败时可使用 DeepSeek 文字降级；DeepSeek 不会被描述成看过图片。
 
@@ -132,11 +132,13 @@ cd /Users/muj666/Desktop/auto
 AUTO_VIDEO_RENDER_STYLE=arbor ./scripts/run_video_with_eval.sh
 ```
 
-默认 `AUTO_VIDEO_IMAGE_MODE=all` 且 `AUTO_VIDEO_IMAGES_PER_SLIDE=2`：每一页都会调用图像模型生成两个不同构图，镜头会轮换使用；PDF 中尺寸合适且与章节文本相关的原始图像也会提取到 `paper_figures/` 并穿插使用。流程图、表格和指标页仍保留本地可控动画，生成图主要用于机制特写与视觉转场。
+默认 `AUTO_VIDEO_IMAGE_MODE=story` 且 `AUTO_VIDEO_IMAGES_PER_SLIDE=2`：概念页和方法流程页会生成一个环境建立镜头和一个机制特写，并采用不同构图与视觉语言；精确数据、表格和指标页继续使用可控的结构化动画。每个方法章节会在插画、论文原图、对比、流程和数据镜头之间切换，减少同质化。PDF 中尺寸合适且与章节文本相关的原始图像也会提取到 `paper_figures/` 并穿插使用。
+
+讲稿默认要求每章约 70-95 个英文词，并允许最多 5 个完整字幕句。镜头规划会将相邻字幕合并为最多 4 个叙事镜头，所以内容加深不会导致画面快速跳切。
 
 PDF 原图还会经过 Omni 相关性验证；其他论文封面、无关演示截图、装饰图标和不支持当前章节的图片会被拒绝。检查记录位于 `paper_figure_index.json` 与 `paper_figure_assignments.json`。
 
-这个默认设置会显著增加图像生成和验证调用次数，因此完整运行时间会比旧版更长；这是为了换取镜头级视觉差异，不再让多个镜头反复使用同一张图。
+这个默认设置通常会为一篇 8-10 页的讲解尝试生成 3-5 张插画。失败的图片最多重试三次，仍不合格时继续使用结构化场景，不会中断整条视频。
 
 如果想完全不用图像模型、全部用本地图表渲染：
 

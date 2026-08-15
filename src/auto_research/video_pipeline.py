@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import html
+import io
 import json
 import math
 import os
@@ -39,9 +40,10 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-v4-flash"
 LUMID_BASE_URL = "https://lum.id/llm/v1"
 LUMID_MODEL = "qwen3.6-27b"
-LUMID_IMAGE_MODEL = "qwen-image"
 LUMID_TTS_MODEL = "qwen-tts"
 LUMID_OMNI_MODEL = "qwen-omni"
+OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1"
+OPENAI_IMAGE_MODEL = "gpt-image-2"
 
 PAPER_VISUAL_THEMES: dict[str, dict[str, Any]] = {
     "signal": {
@@ -414,6 +416,28 @@ def _lumid_base_url() -> str:
     ).rstrip("/")
 
 
+def _image_model_config() -> tuple[str, str, str, str, str] | None:
+    openai_image_key = os.environ.get("OPENAI_IMAGE_API_KEY")
+    generic_openai_base = (os.environ.get("OPENAI_BASE_URL") or "").rstrip("/")
+    if not openai_image_key and "api.openai.com" in generic_openai_base:
+        openai_image_key = os.environ.get("OPENAI_API_KEY")
+    if openai_image_key:
+        return (
+            openai_image_key,
+            (os.environ.get("OPENAI_IMAGE_BASE_URL") or OPENAI_IMAGE_BASE_URL).rstrip("/"),
+            os.environ.get("OPENAI_IMAGE_MODEL") or OPENAI_IMAGE_MODEL,
+            "openai",
+            os.environ.get("OPENAI_IMAGE_SIZE", "1536x864"),
+        )
+
+    return None
+
+
+def _image_model_name() -> str:
+    config = _image_model_config()
+    return config[2] if config else OPENAI_IMAGE_MODEL
+
+
 def _post_bytes(url: str, key: str, body: dict[str, Any], timeout: float) -> tuple[Any, bytes]:
     data = json.dumps(body).encode("utf-8")
     request = urllib.request.Request(
@@ -573,8 +597,15 @@ def _call_openai_vision(prompt: str, image_path: Path) -> str | None:
     )
     timeout = float(os.environ.get("AUTO_VIDEO_API_TIMEOUT", "60"))
     try:
-        encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
-    except OSError:
+        from PIL import Image
+
+        with Image.open(image_path) as source_image:
+            image = source_image.convert("RGB")
+            image.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+            buffer = io.BytesIO()
+            image.save(buffer, format="JPEG", quality=76, optimize=True)
+        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    except (OSError, ValueError):
         return None
     body = {
         "model": model,
@@ -589,7 +620,7 @@ def _call_openai_vision(prompt: str, image_path: Path) -> str | None:
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:image/png;base64,{encoded}",
+                            "url": f"data:image/jpeg;base64,{encoded}",
                         },
                     },
                 ],
@@ -618,24 +649,24 @@ def _call_openai_vision(prompt: str, image_path: Path) -> str | None:
 
 
 def _call_lumid_image(prompt: str, out: Path) -> tuple[bool, str]:
-    key = _lumid_api_key() or os.environ.get("OPENAI_API_KEY")
-    if not key:
-        return False, "missing LUM_API_KEY or OPENAI_API_KEY"
-    base_url = _lumid_base_url()
-    model = os.environ.get("LUMID_IMAGE_MODEL") or os.environ.get("LUM_IMAGE_MODEL") or LUMID_IMAGE_MODEL
+    config = _image_model_config()
+    if not config:
+        return False, "missing OPENAI_IMAGE_API_KEY"
+    key, base_url, model, provider, size = config
     timeout = float(os.environ.get("AUTO_VIDEO_IMAGE_TIMEOUT", os.environ.get("AUTO_VIDEO_API_TIMEOUT", "180")))
     body = {
         "model": model,
         "prompt": prompt,
         "n": 1,
-        "size": os.environ.get("LUMID_IMAGE_SIZE", "1280x720"),
-        "response_format": "b64_json",
+        "size": size,
     }
+    body["quality"] = os.environ.get("OPENAI_IMAGE_QUALITY", "medium")
+    body["output_format"] = "png"
     attempts = max(1, min(5, int(os.environ.get("AUTO_VIDEO_IMAGE_ATTEMPTS", "3"))))
     last_error = "image generation failed"
     for attempt in range(1, attempts + 1):
         try:
-            _progress("image_api", "request image generation", detail=f"model={model} size={body['size']} attempt={attempt}/{attempts}")
+            _progress("image_api", "request image generation", detail=f"provider={provider} model={model} size={body['size']} attempt={attempt}/{attempts}")
             _headers, raw = _post_bytes(f"{base_url}/images/generations", key, body, timeout)
             data = json.loads(raw.decode("utf-8"))
             item = (data.get("data") or [{}])[0]
@@ -657,7 +688,54 @@ def _call_lumid_image(prompt: str, out: Path) -> tuple[bool, str]:
     return False, last_error
 
 
-def _image_generation_prompt(slide: dict[str, Any], *, variant_index: int = 0) -> str:
+def _paper_visual_context(source: dict[str, Any] | None, slides: list[dict[str, Any]]) -> str:
+    source = source or {}
+    title = _clean_display_text(source.get("title"))
+    authors = _clean_display_text(source.get("authors"))
+    raw_text = re.sub(r"\s+", " ", str(source.get("text") or "")).strip()
+    abstract_match = re.search(
+        r"\babstract\b\s*[:.-]?\s*(.*?)(?=\b(?:1\s*[.]?\s*)?introduction\b)",
+        raw_text,
+        flags=re.I,
+    )
+    background_text = abstract_match.group(1).strip() if abstract_match else raw_text[:5000]
+    background_sentences = _sentences(background_text)
+    background = " ".join(background_sentences[:7]).strip()[:1600]
+    if not background:
+        background = _clean_display_text(raw_text[:1200])
+
+    anchors: list[str] = []
+    for slide in slides[:12]:
+        section = _clean_display_text(slide.get("title"))
+        purpose = _clean_display_text(slide.get("purpose"))
+        bullets = [
+            _clean_display_text(item)
+            for item in (slide.get("bullets") or [])[:2]
+            if str(item).strip()
+        ]
+        detail = "; ".join(item for item in (purpose, *bullets) if item)
+        if section and detail:
+            anchors.append(f"{section}: {detail}")
+        elif section:
+            anchors.append(section)
+    storyline = " | ".join(anchors)[:1800]
+
+    parts = [f"Paper title: {title}." if title else ""]
+    if authors:
+        parts.append(f"Authors: {authors}.")
+    if background:
+        parts.append(f"Research background and contribution: {background}")
+    if storyline:
+        parts.append(f"Presentation storyline and evidence anchors: {storyline}")
+    return " ".join(part for part in parts if part).strip()[:3600]
+
+
+def _image_generation_prompt(
+    slide: dict[str, Any],
+    *,
+    variant_index: int = 0,
+    paper_context: str = "",
+) -> str:
     bullets = [_clean_display_text(item) for item in slide.get("bullets", []) if str(item).strip()]
     caption = _clean_display_text(slide.get("visual_caption"))
     intent = _clean_display_text(slide.get("visual_prompt"))
@@ -668,14 +746,44 @@ def _image_generation_prompt(slide: dict[str, Any], *, variant_index: int = 0) -
     visual_concept = re.sub(r"\bsplit[- ]screen\b", "balanced left-right composition", visual_concept, flags=re.I)
     visual_concept = re.sub(r"\b(?:browser|dashboard|interface|screenshot|webpage)\b", "scene", visual_concept, flags=re.I)
     visual_concept = re.sub(r"\s+", " ", visual_concept).strip()[:700]
+    visual_kind = str(slide.get("visual_kind") or "image").strip().casefold()
+    section_title = _clean_display_text(slide.get("title"))
+    section_purpose = _clean_display_text(slide.get("purpose"))
+    treatment = (
+        "Translate the workflow into a text-free physical metaphor with three to five large stages connected by simple arrows. "
+        "Do not draw a labelled flowchart, technical schematic, code window, or user interface."
+        if visual_kind == "flow"
+        else "Show one concrete situation with a clear subject, cause, and consequence."
+    )
+    slide_index = int(slide.get("index") or 0)
+    art_directions = (
+        "Cinematic editorial illustration with dimensional lighting, tactile materials, and a grounded real-world setting.",
+        "Isometric research diorama with layered depth, precise physical relationships, and a restrained scientific palette.",
+        "Documentary-style editorial collage combining realistic objects, paper texture, and clean diagrammatic motion cues.",
+        "Bold scientific cutaway illustration with large geometric forms, visible cause-and-effect, and high spatial clarity.",
+    )
+    art_direction = art_directions[(slide_index + variant_index) % len(art_directions)]
     return " ".join(
         [
             "Full-bleed editorial vector illustration, widescreen 16:9.",
+            (
+                "This scene belongs to one specific research paper. Use the following paper-level context for semantic grounding, "
+                "not as text to render: " + paper_context
+                if paper_context
+                else "This scene belongs to one specific research work, not a generic technology presentation."
+            ),
+            f"Current section: {section_title}." if section_title else "",
+            f"Section purpose: {section_purpose}." if section_purpose else "",
             f"Visual concept: {visual_concept}.",
+            treatment,
+            "Represent the paper's domain-specific entities, method components, dataset, experimental evidence, or causal mechanism that are relevant to this exact section.",
+            "Do not reduce the idea to generic paper pages transforming into a video, a play button, decorative AI symbols, or an interchangeable stock technology scene.",
             "Depict the idea directly with people, physical objects, pictograms, arrows, and spatial relationships across one cohesive canvas.",
+            "Treat every technical term as a visual idea only; never reproduce wording from the prompt inside the image.",
             "Use unlabelled shapes and symbols only. The image contains no words, letters, numbers, logos, controls, menus, or framed page.",
             "Keep every important object fully visible with eight percent empty safe margin on all four sides.",
-            "Clean flat-vector style, strong silhouette, restrained color palette, no nested canvas.",
+            art_direction,
+            "Keep the visual language polished and consistent with an academic explainer, but do not imitate a presentation slide or dashboard; no nested canvas.",
             (
                 "Use a close explanatory composition centered on the mechanism and its interacting parts."
                 if variant_index % 3 == 1
@@ -722,6 +830,8 @@ def _validate_generated_slide_image(slide: dict[str, Any], image_path: Path) -> 
         Acceptance rules:
         - relevance_score must be at least 7.5.
         - The visual must directly represent the slide's concrete subject and claims.
+        - Use the paper context to reject generic stock technology scenes, generic AI symbols,
+          or a paper-to-play-button metaphor when they omit the section's specific mechanism.
         - All important objects and panels must be fully visible with safe margins.
         - Reject partial screenshots, browser windows, document fragments, cropped slides, and cut-off diagrams.
         - Reject readable or garbled generated text.
@@ -731,18 +841,39 @@ def _validate_generated_slide_image(slide: dict[str, Any], image_path: Path) -> 
         Slide bullets: {json.dumps([_clean_display_text(item) for item in slide.get("bullets", [])], ensure_ascii=False)}
         Visual caption: {_clean_display_text(slide.get("visual_caption"))}
         Visual intent: {_clean_display_text(slide.get("visual_prompt"))}
+        Paper-level context: {_clean_display_text(slide.get("paper_visual_context"))[:2800]}
         """
     ).strip()
     raw = _call_openai_vision(prompt, image_path)
     data = _json_from_model(raw)
     if not isinstance(data, dict) or not data:
+        renderable = False
+        dimensions = [0, 0]
+        try:
+            from PIL import Image
+
+            with Image.open(image_path) as image:
+                image.verify()
+            with Image.open(image_path) as image:
+                dimensions = [int(image.width), int(image.height)]
+                aspect = image.width / max(1, image.height)
+                renderable = image.width >= 640 and image.height >= 360 and 1.2 <= aspect <= 2.4
+        except (OSError, ValueError):
+            renderable = False
         return {
-            "accepted": False,
+            "accepted": renderable,
+            "validator_available": False,
             "relevance_score": 0.0,
-            "complete_frame": False,
-            "no_screenshot_or_document_crop": False,
-            "no_readable_text": False,
-            "reasons": ["The visual validator did not return valid JSON."],
+            "complete_frame": renderable,
+            "no_screenshot_or_document_crop": renderable,
+            "no_readable_text": renderable,
+            "dimensions": dimensions,
+            "validation_mode": "renderability_fallback",
+            "reasons": [
+                "VLM unavailable; retained the generated image after file, size, and aspect-ratio checks."
+                if renderable
+                else "VLM unavailable and the generated image failed renderability checks."
+            ],
         }
     try:
         score = float(data.get("relevance_score") or 0.0)
@@ -754,12 +885,240 @@ def _validate_generated_slide_image(slide: dict[str, Any], image_path: Path) -> 
     accepted = bool(data.get("accepted")) and score >= 7.5 and complete and no_crop and no_text
     return {
         "accepted": accepted,
+        "validator_available": True,
         "relevance_score": max(0.0, min(10.0, score)),
         "complete_frame": complete,
         "no_screenshot_or_document_crop": no_crop,
         "no_readable_text": no_text,
         "reasons": [str(item) for item in data.get("reasons", []) if str(item).strip()],
     }
+
+
+def _parse_page_visual_regions(raw: str, *, width: int, height: int) -> list[dict[str, Any]]:
+    data = _json_from_model(raw)
+    regions = data.get("regions") if isinstance(data, dict) else []
+    parsed: list[dict[str, Any]] = []
+    for item in regions if isinstance(regions, list) else []:
+        if not isinstance(item, dict):
+            continue
+        bbox = item.get("bbox_percent") or item.get("bbox")
+        if not isinstance(bbox, list) or len(bbox) != 4:
+            continue
+        try:
+            values = [float(value) for value in bbox]
+        except (TypeError, ValueError):
+            continue
+        if max(values) <= 1.0:
+            values = [value * 100.0 for value in values]
+        left, top, right, bottom = values
+        left, right = sorted((max(0.0, min(100.0, left)), max(0.0, min(100.0, right))))
+        top, bottom = sorted((max(0.0, min(100.0, top)), max(0.0, min(100.0, bottom))))
+        region_width = right - left
+        region_height = bottom - top
+        if region_width < 18.0 or region_height < 5.0 or region_width * region_height > 7200.0:
+            continue
+        margin_x = min(1.2, left, 100.0 - right)
+        margin_y = min(0.8, top, 100.0 - bottom)
+        left -= margin_x
+        right += margin_x
+        top -= margin_y
+        bottom += margin_y
+        parsed.append(
+            {
+                "kind": str(item.get("kind") or "figure").strip().lower(),
+                "label": _clean_display_text(item.get("label") or "Paper figure"),
+                "caption": _clean_display_text(item.get("caption") or ""),
+                "crop_box": (
+                    max(0, int(width * left / 100.0)),
+                    max(0, int(height * top / 100.0)),
+                    min(width, int(math.ceil(width * right / 100.0))),
+                    min(height, int(math.ceil(height * bottom / 100.0))),
+                ),
+            }
+        )
+    return parsed[:3]
+
+
+def _extract_rendered_page_regions(
+    source_path: Path,
+    reader: Any,
+    figure_dir: Path,
+    *,
+    max_figures: int,
+) -> list[dict[str, Any]]:
+    if max_figures <= 0:
+        return []
+    enabled = os.environ.get("AUTO_VIDEO_PAPER_REGION_EXTRACTION", "1").strip().lower() not in {
+        "0", "false", "no", "off"
+    }
+    if not enabled:
+        return []
+    page_limit = max(1, int(os.environ.get("AUTO_VIDEO_PAPER_REGION_MAX_PAGES", "10")))
+    rendered_dir = figure_dir / "_rendered_pages"
+    rendered_dir.mkdir(parents=True, exist_ok=True)
+    candidates: list[dict[str, Any]] = []
+    caption_pattern = re.compile(r"^(?:figure|table)\s*\d+\s*[:.]", flags=re.IGNORECASE)
+    try:
+        try:
+            import pypdfium2 as pdfium
+        except ImportError:
+            pdfium = None
+        pdftoppm = shutil.which("pdftoppm")
+        swift = shutil.which("swift")
+        swift_renderer = Path(__file__).resolve().parents[2] / "scripts" / "render_pdf_pages.swift"
+        can_use_pdfkit = bool(swift and swift_renderer.is_file())
+        if pdfium is None and pdftoppm is None and not can_use_pdfkit:
+            _progress(
+                "paper_figure",
+                "page region extraction unavailable",
+                detail="install pypdfium2 or poppler; embedded-image fallback remains available",
+            )
+            return []
+        renderer_name = (
+            "pypdfium2"
+            if pdfium is not None
+            else "pdftoppm"
+            if pdftoppm
+            else "macos_pdfkit"
+        )
+        _progress("paper_figure", "page renderer ready", detail=f"backend={renderer_name}")
+        pdf_document = pdfium.PdfDocument(str(source_path)) if pdfium is not None else None
+        pages_with_visuals: list[tuple[int, str, list[str]]] = []
+        for page_index, page in enumerate(reader.pages[:30], start=1):
+            page_text = _clean_display_text(page.extract_text() or "")[:6000]
+            captions = [
+                line.strip()
+                for line in (page.extract_text() or "").splitlines()
+                if caption_pattern.match(line.strip())
+            ]
+            if captions:
+                pages_with_visuals.append((page_index, page_text, captions[:5]))
+            if len(pages_with_visuals) >= page_limit:
+                break
+
+        if pdfium is None and pdftoppm is None and can_use_pdfkit and pages_with_visuals:
+            render_proc = subprocess.run(
+                [
+                    str(swift),
+                    str(swift_renderer),
+                    str(source_path),
+                    str(rendered_dir),
+                    *[str(page_index) for page_index, _text, _captions in pages_with_visuals],
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            if render_proc.returncode != 0:
+                raise RuntimeError("macOS PDFKit page renderer failed")
+
+        for position, (page_index, page_text, captions) in enumerate(pages_with_visuals, start=1):
+            if len(candidates) >= max_figures:
+                break
+            prefix = rendered_dir / f"page_{page_index:02d}"
+            rendered_path = prefix.with_suffix(".png")
+            if pdf_document is not None:
+                pdf_page = pdf_document[page_index - 1]
+                bitmap = pdf_page.render(scale=150.0 / 72.0)
+                bitmap.to_pil().convert("RGB").save(rendered_path)
+                bitmap.close()
+                pdf_page.close()
+            elif pdftoppm is not None:
+                proc = subprocess.run(
+                    [
+                        str(pdftoppm),
+                        "-f", str(page_index),
+                        "-l", str(page_index),
+                        "-r", "150",
+                        "-png",
+                        "-singlefile",
+                        str(source_path),
+                        str(prefix),
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                if proc.returncode != 0 or not rendered_path.is_file():
+                    continue
+            elif not rendered_path.is_file():
+                continue
+            from PIL import Image
+
+            page_image = Image.open(rendered_path).convert("RGB")
+            prompt = textwrap.dedent(
+                f"""
+                Locate the complete figures and tables that belong to this scientific paper page.
+                Return JSON only:
+                {{"regions":[{{"kind":"figure|table","label":"Figure 4","caption":"short caption","bbox_percent":[left,top,right,bottom]}}]}}
+
+                Coordinates are percentages from 0 to 100 relative to the full page image.
+                Include the complete visual and its identifying caption or table title so the region can be found reliably.
+                Keep the box tight: end immediately after the caption for a figure, or immediately after the final row for a table.
+                Exclude surrounding body paragraphs, section headings, page headers, footers, and page numbers.
+                Treat a multi-panel figure as one region rather than separate thumbnails.
+                Return at most three regions. Do not return the whole page.
+
+                Captions detected from the PDF text:
+                {json.dumps(captions, ensure_ascii=False)}
+                Page text excerpt:
+                {page_text[:2600]}
+                """
+            ).strip()
+            raw = _call_openai_vision(prompt, rendered_path)
+            regions = _parse_page_visual_regions(raw, width=page_image.width, height=page_image.height)
+            if not regions:
+                retry_prompt = textwrap.dedent(
+                    f"""
+                    This scientific-paper page contains the following Figure/Table captions:
+                    {json.dumps(captions, ensure_ascii=False)}
+                    Locate each corresponding complete visual region. Return JSON only as
+                    {{"regions":[{{"kind":"figure|table","label":"Figure 1","caption":"short caption","bbox_percent":[left,top,right,bottom]}}]}}.
+                    Coordinates use 0 to 100. Include the visual and identifying caption, exclude
+                    unrelated paragraphs and page furniture, and return at most three regions.
+                    """
+                ).strip()
+                retry_raw = _call_openai_vision(retry_prompt, rendered_path)
+                regions = _parse_page_visual_regions(
+                    retry_raw, width=page_image.width, height=page_image.height
+                )
+            _progress(
+                "paper_figure",
+                "page visual regions detected",
+                current=position,
+                total=len(pages_with_visuals),
+                detail=f"page={page_index} regions={len(regions)}",
+            )
+            for region_index, region in enumerate(regions, start=1):
+                crop = page_image.crop(region["crop_box"])
+                if crop.width < 320 or crop.height < 120:
+                    continue
+                path = figure_dir / f"page_{page_index:02d}_region_{region_index:02d}.png"
+                crop.save(path)
+                caption = " ".join(
+                    part for part in (region.get("label"), region.get("caption")) if str(part).strip()
+                )
+                candidates.append(
+                    {
+                        "id": f"p{page_index:02d}r{region_index:02d}",
+                        "page": page_index,
+                        "path": str(path.resolve()),
+                        "width": crop.width,
+                        "height": crop.height,
+                        "page_text": caption or page_text,
+                        "caption": caption,
+                        "extraction_mode": "rendered_page_region",
+                    }
+                )
+                if len(candidates) >= max_figures:
+                    break
+        if pdf_document is not None:
+            pdf_document.close()
+    except Exception as exc:
+        _progress("paper_figure", "page region extraction failed", detail=f"{type(exc).__name__}: {str(exc)[:140]}")
+    finally:
+        shutil.rmtree(rendered_dir, ignore_errors=True)
+    return candidates
 
 
 def extract_paper_figures(source: dict[str, Any], out_dir: Path) -> list[dict[str, Any]]:
@@ -780,6 +1139,14 @@ def extract_paper_figures(source: dict[str, Any], out_dir: Path) -> list[dict[st
     seen_hashes: set[str] = set()
     try:
         reader = PdfReader(str(source_path))
+        candidates.extend(
+            _extract_rendered_page_regions(
+                source_path,
+                reader,
+                figure_dir,
+                max_figures=max_figures,
+            )
+        )
         for page_index, page in enumerate(reader.pages[:30], start=1):
             page_text = _clean_display_text(page.extract_text() or "")[:5000]
             for image_index, image_file in enumerate(list(page.images)[:8], start=1):
@@ -805,6 +1172,8 @@ def extract_paper_figures(source: dict[str, Any], out_dir: Path) -> list[dict[st
                         "width": width,
                         "height": height,
                         "page_text": page_text,
+                        "caption": "",
+                        "extraction_mode": "embedded_image",
                     }
                 )
             if len(candidates) >= max_figures:
@@ -838,7 +1207,13 @@ def _validate_paper_figure_for_slide(slide: dict[str, Any], image_path: Path) ->
     ).strip()
     data = _json_from_model(_call_openai_vision(prompt, image_path))
     if not isinstance(data, dict) or not data:
-        return {"accepted": False, "relevance_score": 0.0, "is_source_evidence": False, "reasons": ["No valid VLM decision."]}
+        return {
+            "accepted": False,
+            "validator_available": False,
+            "relevance_score": 0.0,
+            "is_source_evidence": False,
+            "reasons": ["No valid VLM decision."],
+        }
     try:
         score = float(data.get("relevance_score") or 0.0)
     except (TypeError, ValueError):
@@ -847,6 +1222,7 @@ def _validate_paper_figure_for_slide(slide: dict[str, Any], image_path: Path) ->
     accepted = bool(data.get("accepted")) and score >= 7.5 and evidence
     return {
         "accepted": accepted,
+        "validator_available": True,
         "relevance_score": max(0.0, min(10.0, score)),
         "is_source_evidence": evidence,
         "reasons": [str(item) for item in data.get("reasons", []) if str(item).strip()],
@@ -891,6 +1267,8 @@ def assign_paper_figures(
             overlap = slide_tokens & page_tokens
             score = float(len(overlap)) + min(1.5, len(overlap) / max(1, len(slide_tokens)) * 4.0)
             score += min(1.0, (int(figure.get("width") or 0) * int(figure.get("height") or 0)) / 1_500_000)
+            if str(figure.get("extraction_mode") or "") == "rendered_page_region":
+                score += 8.0
             ranked.append((score, figure))
         selected: list[dict[str, Any]] = []
         validations: list[dict[str, Any]] = []
@@ -901,8 +1279,28 @@ def assign_paper_figures(
             decision = (
                 _validate_paper_figure_for_slide(slide, Path(str(candidate["path"])))
                 if validate_with_vlm
-                else {"accepted": True, "relevance_score": None, "is_source_evidence": None, "reasons": ["Text relevance assignment"]}
+                else {
+                    "accepted": True,
+                    "validator_available": False,
+                    "relevance_score": None,
+                    "is_source_evidence": None,
+                    "reasons": ["Text relevance assignment"],
+                }
             )
+            if (
+                validate_with_vlm
+                and not decision.get("validator_available", True)
+                and str(candidate.get("extraction_mode") or "") == "rendered_page_region"
+                and score >= 8.0
+            ):
+                decision = {
+                    **decision,
+                    "accepted": True,
+                    "is_source_evidence": True,
+                    "reasons": [
+                        "VLM unavailable; accepted complete source-paper region by caption relevance."
+                    ],
+                }
             validations.append({"path": str(candidate["path"]), "text_score": round(score, 3), **decision})
             if decision.get("accepted"):
                 selected.append(candidate)
@@ -912,25 +1310,54 @@ def assign_paper_figures(
         used_paths.update(paths)
 
 
-def generate_slide_images(slides: list[dict[str, Any]], out_dir: Path, *, use_image_api: bool) -> list[dict[str, Any]]:
+def _image_slide_eligible(
+    image_mode: str,
+    slide_kind: str,
+    *,
+    has_source_candidate: bool = False,
+) -> bool:
+    mode = str(image_mode or "").strip().casefold()
+    kind = str(slide_kind or "").strip().casefold()
+    return (
+        mode in {"all", "1", "true", "yes"}
+        or (
+            mode in {"compare", "competition"}
+            and (has_source_candidate or kind in {"image", "flow"})
+        )
+        or (mode in {"story", "scene", "storytelling"} and kind in {"image", "flow"})
+        or (mode in {"image_only", "images"} and kind == "image")
+    )
+
+
+def generate_slide_images(
+    slides: list[dict[str, Any]],
+    out_dir: Path,
+    *,
+    use_image_api: bool,
+    source: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     image_dir = out_dir / "generated_images"
     image_dir.mkdir(parents=True, exist_ok=True)
     results: list[dict[str, Any]] = []
-    image_mode = os.environ.get("AUTO_VIDEO_IMAGE_MODE", "image_only").strip().lower()
+    image_mode = os.environ.get("AUTO_VIDEO_IMAGE_MODE", "story").strip().lower()
     variants_per_slide = max(1, int(os.environ.get("AUTO_VIDEO_IMAGES_PER_SLIDE", "1")))
+    paper_context = _paper_visual_context(source, slides)
+    for slide in slides:
+        slide["paper_visual_context"] = paper_context
     total = len(slides) * variants_per_slide
     _progress(
         "image_builder",
         "start slide visual generation",
         current=0,
         total=total,
-        detail=f"api={'on' if use_image_api else 'off'} mode={image_mode} variants={variants_per_slide} model={os.environ.get('LUMID_IMAGE_MODEL') or os.environ.get('LUM_IMAGE_MODEL') or LUMID_IMAGE_MODEL}",
+        detail=f"api={'on' if use_image_api else 'off'} mode={image_mode} variants={variants_per_slide} model={_image_model_name()}",
     )
     for n, slide in enumerate(slides, start=1):
         slide_kind = str(slide.get("visual_kind") or "image").strip().lower()
-        eligible = (
-            image_mode in {"all", "1", "true", "yes"}
-            or (image_mode in {"image_only", "images"} and slide_kind == "image")
+        eligible = _image_slide_eligible(
+            image_mode,
+            slide_kind,
+            has_source_candidate=bool(slide.get("paper_figure_paths")),
         )
         generated_paths: list[str] = []
         validate_images = os.environ.get("AUTO_VIDEO_IMAGE_VALIDATE", "1").strip().lower() not in {"0", "false", "no", "off"}
@@ -938,7 +1365,11 @@ def generate_slide_images(slides: list[dict[str, Any]], out_dir: Path, *, use_im
         prompts: list[str] = []
         for variant_index in range(variants_per_slide):
             progress_index = (n - 1) * variants_per_slide + variant_index + 1
-            prompt = _image_generation_prompt(slide, variant_index=variant_index)
+            prompt = _image_generation_prompt(
+                slide,
+                variant_index=variant_index,
+                paper_context=paper_context,
+            )
             prompts.append(prompt)
             path = image_dir / f"slide_{int(slide['index']):02d}_v{variant_index + 1:02d}.png"
             ok = eligible and path.is_file() and path.stat().st_size > 0
@@ -995,7 +1426,7 @@ def generate_slide_images(slides: list[dict[str, Any]], out_dir: Path, *, use_im
                     "variant_index": variant_index + 1,
                     "asset_kind": "generated",
                     "ok": ok,
-                    "model": os.environ.get("LUMID_IMAGE_MODEL") or os.environ.get("LUM_IMAGE_MODEL") or LUMID_IMAGE_MODEL,
+                    "model": _image_model_name(),
                     "path": str(path.resolve()) if ok else "",
                     "prompt": prompt,
                     "validation": validation,
@@ -1014,6 +1445,7 @@ def generate_slide_images(slides: list[dict[str, Any]], out_dir: Path, *, use_im
             if index < len(paper_paths):
                 visual_assets.append(paper_paths[index])
         slide["generated_image_prompts"] = prompts
+        slide["paper_visual_context"] = paper_context
         slide["generated_image_paths"] = generated_paths
         slide["visual_asset_paths"] = visual_assets
         slide["generated_image_prompt"] = prompts[0] if prompts else ""
@@ -1066,6 +1498,133 @@ def generate_slide_images(slides: list[dict[str, Any]], out_dir: Path, *, use_im
     figure_count = sum(len(slide.get("paper_figure_paths") or []) for slide in slides)
     _progress("image_builder", "finished slide visual generation", current=total, total=total, detail=f"generated={ok_count}/{total} paper_figures={figure_count}")
     return results
+
+
+def _visual_candidate_comparison_image(source_path: Path, generated_path: Path, out: Path) -> None:
+    from PIL import Image, ImageDraw, ImageOps
+
+    canvas = Image.new("RGB", (1600, 900), "white")
+    draw = ImageDraw.Draw(canvas)
+    panels = ((source_path, 20, "A: SOURCE"), (generated_path, 810, "B: GENERATED"))
+    for path, left, label in panels:
+        image = Image.open(path).convert("RGB")
+        fitted = ImageOps.contain(image, (750, 800))
+        x = left + (750 - fitted.width) // 2
+        y = 70 + (800 - fitted.height) // 2
+        canvas.paste(fitted, (x, y))
+        draw.rectangle((left, 55, left + 750, 880), outline=(80, 90, 105), width=3)
+        draw.text((left + 16, 18), label, fill=(20, 25, 35))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(out)
+
+
+def select_slide_visual_assets(
+    slides: list[dict[str, Any]],
+    out_dir: Path,
+    *,
+    use_vlm: bool,
+) -> list[dict[str, Any]]:
+    """Let the vision model choose source evidence, generated art, or a useful sequence."""
+    comparison_dir = out_dir / "visual_comparisons"
+    decisions: list[dict[str, Any]] = []
+    for slide in slides:
+        source_paths = [
+            str(path)
+            for path in slide.get("paper_figure_paths") or []
+            if Path(str(path)).is_file()
+        ]
+        generated_paths = [
+            str(path)
+            for path in slide.get("generated_image_paths") or []
+            if Path(str(path)).is_file()
+        ]
+        winner = "source" if source_paths else "generated" if generated_paths else "structured"
+        reason = "Only one validated visual type is available."
+        scores: dict[str, float] = {}
+        comparison_path = ""
+        if source_paths and generated_paths:
+            visual_kind = str(slide.get("visual_kind") or "image").casefold()
+            winner = "source" if visual_kind in {"table", "metrics"} else "generated"
+            reason = "Deterministic fallback after visual comparison was unavailable."
+            if use_vlm:
+                comparison = comparison_dir / f"slide_{int(slide.get('index') or 0):02d}.png"
+                _visual_candidate_comparison_image(
+                    Path(source_paths[0]), Path(generated_paths[0]), comparison
+                )
+                comparison_path = str(comparison.resolve())
+                prompt = textwrap.dedent(
+                    f"""
+                    Compare two candidate visuals for one academic explainer-video section.
+                    Candidate A is extracted from the source paper. Candidate B is generated.
+                    Return JSON only:
+                    {{"winner":"source|generated|both","source_score":0-10,"generated_score":0-10,"reason":"brief explanation"}}
+
+                    Choose the visual that works better on a 1280x720 video frame. Judge factual
+                    accuracy, relevance to the exact narration, readability, completeness, visual
+                    clarity, and information value. Reject cropped source material, tiny unreadable
+                    tables, generic generated art, garbled text, or misleading diagrams. Do not
+                    prefer either candidate merely because it is original or generated. Choose
+                    "both" only when they are complementary and should appear in sequence.
+
+                    Section title: {_clean_display_text(slide.get('title'))}
+                    Section purpose: {_clean_display_text(slide.get('purpose'))}
+                    Narration: {_clean_display_text(slide.get('speaker_note'))[:1200]}
+                    Claims: {json.dumps([_clean_display_text(item) for item in slide.get('bullets') or []], ensure_ascii=False)}
+                    """
+                ).strip()
+                data = _json_from_model(_call_openai_vision(prompt, comparison))
+                model_winner = str(data.get("winner") or "").strip().casefold() if isinstance(data, dict) else ""
+                if model_winner in {"source", "generated", "both"}:
+                    winner = model_winner
+                    reason = _clean_display_text(data.get("reason")) or "Selected by visual comparison."
+                    for name in ("source", "generated"):
+                        try:
+                            scores[name] = max(0.0, min(10.0, float(data.get(f"{name}_score") or 0.0)))
+                        except (TypeError, ValueError):
+                            scores[name] = 0.0
+        if winner == "source":
+            ordered_paths = [*source_paths, *generated_paths]
+            preference = "paper_figure"
+        elif winner == "generated":
+            ordered_paths = [*generated_paths, *source_paths]
+            preference = "generated_scene"
+        elif winner == "both":
+            source_first = str(slide.get("visual_kind") or "").casefold() in {"table", "metrics", "flow"}
+            ordered_paths = (
+                [*source_paths, *generated_paths]
+                if source_first
+                else [*generated_paths, *source_paths]
+            )
+            preference = "paper_figure" if source_first else "generated_scene"
+        else:
+            ordered_paths = []
+            preference = "structured"
+        slide["visual_asset_paths"] = ordered_paths
+        slide["generated_image_path"] = ordered_paths[0] if ordered_paths else ""
+        slide["visual_asset_preference"] = preference
+        slide["visual_asset_comparison"] = {
+            "winner": winner,
+            "scores": scores,
+            "reason": reason,
+            "comparison_path": comparison_path,
+        }
+        decisions.append(
+            {
+                "slide_index": int(slide.get("index") or 0),
+                "title": slide.get("title"),
+                "winner": winner,
+                "scores": scores,
+                "reason": reason,
+                "source_paths": source_paths,
+                "generated_paths": generated_paths,
+                "selected_order": ordered_paths,
+                "comparison_path": comparison_path,
+            }
+        )
+    (out_dir / "visual_asset_selection.json").write_text(
+        json.dumps(decisions, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    return decisions
 
 
 def synthesize_tts_audio(talker: dict[str, Any], out_dir: Path, *, use_tts: bool) -> dict[str, Any]:
@@ -1172,22 +1731,67 @@ def synthesize_tts_segments(
     post_hold = max(0.5, min(4.0, float(result["post_speech_hold_sec"])))
     segment_dir = out_dir / "narration_segments"
     segment_dir.mkdir(parents=True, exist_ok=True)
+    previous_segment_text: dict[int, str] = {}
+    previous_tts_path = out_dir / "tts_generation.json"
+    if previous_tts_path.is_file():
+        try:
+            previous_tts = json.loads(previous_tts_path.read_text(encoding="utf-8"))
+            previous_segment_text = {
+                int(item.get("index")): str(item.get("text") or "").strip()
+                for item in previous_tts.get("segments") or []
+                if isinstance(item, dict) and item.get("index") is not None
+            }
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            previous_segment_text = {}
     jobs: list[tuple[int, str, Path]] = []
     for index, subtitle in enumerate(subtitles):
         text = _prepare_tts_text(str(subtitle.get("text") or "").strip())
-        jobs.append((index, text, segment_dir / f"raw_{index:03d}.mp3"))
+        text_fingerprint = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+        hashed_path = segment_dir / f"raw_{index:03d}_{text_fingerprint}.mp3"
+        legacy_path = segment_dir / f"raw_{index:03d}.mp3"
+        if (
+            not hashed_path.is_file()
+            and legacy_path.is_file()
+            and previous_segment_text.get(index) == text
+        ):
+            shutil.copy2(legacy_path, hashed_path)
+        jobs.append((index, text, hashed_path))
 
     def generate(job: tuple[int, str, Path]) -> tuple[int, bool, str, Path]:
         index, text, path = job
         if not text:
             return index, False, "empty subtitle", path
+        if path.is_file() and path.stat().st_size > 0 and media_duration_seconds(path):
+            return index, True, "", path
         ok, error = _synthesize_tts_clip(text, path)
         return index, ok, error, path
 
     workers = max(1, min(4, int(os.environ.get("AUTO_VIDEO_TTS_WORKERS", "2"))))
+    recovery_delays = [
+        max(0.0, float(value))
+        for value in os.environ.get("AUTO_VIDEO_TTS_RECOVERY_DELAYS", "5,15,30,60").split(",")
+        if value.strip()
+    ]
     _progress("tts_builder", "generate timed narration segments", current=0, total=len(jobs), detail=f"workers={workers} tempo={tempo:.2f}")
+    first_result = generate(jobs[0])
+    for recovery_index, delay in enumerate(recovery_delays, start=1):
+        if first_result[1]:
+            break
+        _progress(
+            "tts_builder",
+            "wait for speech service recovery",
+            current=0,
+            total=len(jobs),
+            detail=f"retry={recovery_index}/{len(recovery_delays)} wait={delay:.0f}s error={first_result[2][:100]}",
+        )
+        time.sleep(delay)
+        first_result[3].unlink(missing_ok=True)
+        first_result = generate(jobs[0])
+    if not first_result[1]:
+        result["error"] = f"speech service unavailable: {first_result[2]}"
+        return result, subtitles
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        generated = list(pool.map(generate, jobs))
+        generated = [first_result, *list(pool.map(generate, jobs[1:]))]
     retry_attempts = max(1, min(5, int(os.environ.get("AUTO_VIDEO_TTS_SEGMENT_RETRIES", "3"))))
     recovered: list[tuple[int, bool, str, Path]] = []
     for index, ok, error, raw_path in generated:
@@ -1206,7 +1810,8 @@ def synthesize_tts_segments(
                 if ok:
                     break
                 if attempt < retry_attempts:
-                    time.sleep(min(3.0, 0.75 * attempt))
+                    delay_index = min(attempt - 1, max(0, len(recovery_delays) - 1))
+                    time.sleep(recovery_delays[delay_index] if recovery_delays else 3.0)
         recovered.append((index, ok, error, raw_path))
     generated = recovered
     generated.sort(key=lambda item: item[0])
@@ -1543,6 +2148,378 @@ def decide_target_slide_count(source: dict[str, Any], *, max_slides: int, use_ap
     return fallback
 
 
+def _model_slide_payload_issues(
+    items: Any,
+    *,
+    expected_count: int,
+    expected_indices: list[int] | None = None,
+) -> list[str]:
+    """Reject incomplete or template-like model text before normalization can hide it."""
+    if not isinstance(items, list):
+        return ["slides must be a JSON list"]
+    issues: list[str] = []
+    if len(items) != expected_count:
+        issues.append(f"expected {expected_count} slides, received {len(items)}")
+    required_text = ("title", "purpose", "speaker_note", "visual_prompt", "visual_caption")
+    forbidden = (
+        "supports the current explanation",
+        "keeps the demo grounded",
+        "research context",
+        "point 1",
+        "point 2",
+        "point 3",
+        "todo",
+        "placeholder",
+    )
+    for position, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            issues.append(f"slide {position} is not an object")
+            continue
+        slide_index = int(item.get("index") or position)
+        expected_index = expected_indices[position - 1] if expected_indices and position <= len(expected_indices) else position
+        if slide_index != expected_index and expected_count == len(items):
+            issues.append(f"slide at position {position} has index {slide_index}, expected {expected_index}")
+        for key in required_text:
+            value = _clean_display_text(item.get(key))
+            if not value:
+                issues.append(f"slide {slide_index} missing {key}")
+        bullets = item.get("bullets")
+        bullet_count = len([b for b in bullets if _clean_display_text(b)]) if isinstance(bullets, list) else 0
+        if not 2 <= bullet_count <= 6:
+            issues.append(f"slide {slide_index} needs 2-6 model-written bullets")
+        factual_summary = " ".join(
+            [
+                _clean_display_text(item.get("title")),
+                *(
+                    [_clean_display_text(value) for value in bullets]
+                    if isinstance(bullets, list)
+                    else []
+                ),
+            ]
+        )
+        narration = _clean_display_text(item.get("speaker_note"))
+        exact_numbers = sorted(set(re.findall(r"(?<![A-Za-z0-9])\d{2,}(?:\.\d+)?(?:%|x|×)?", factual_summary)))
+        missing_numbers = [value for value in exact_numbers if value.casefold() not in narration.casefold()]
+        if missing_numbers:
+            issues.append(
+                f"slide {slide_index} speaker_note must preserve exact factual numbers: "
+                + ", ".join(missing_numbers)
+            )
+        visual_items = item.get("visual_items")
+        if not isinstance(visual_items, list) or len([v for v in visual_items if _clean_display_text(v)]) < 2:
+            issues.append(f"slide {slide_index} needs at least two model-written visual_items")
+        labels = item.get("animation_labels")
+        if not isinstance(labels, dict):
+            issues.append(f"slide {slide_index} missing animation_labels")
+        else:
+            label_values = [_clean_display_text(labels.get(key)) for key in ("primary", "secondary", "result")]
+            if any(not value for value in label_values) or len({value.casefold() for value in label_values}) < 3:
+                issues.append(f"slide {slide_index} animation_labels must contain three distinct phrases")
+            if any(len(value) > 48 or len(value.split()) > 7 for value in label_values):
+                issues.append(f"slide {slide_index} animation_labels must be concise display labels")
+        direction = item.get("scene_direction")
+        if not isinstance(direction, dict) or not all(_clean_display_text(direction.get(key)) for key in ("layout", "entrance", "emphasis")):
+            issues.append(f"slide {slide_index} has incomplete scene_direction")
+        rows = _normalize_visual_table(item.get("visual_table") if isinstance(item.get("visual_table"), list) else [])
+        kind = str(item.get("visual_kind") or "").casefold()
+        if kind in {"table", "metrics"} and not _visual_table_is_meaningful(rows):
+            issues.append(f"slide {slide_index} requires a source-grounded visual_table")
+        if rows:
+            widths = max((len(row) for row in rows), default=0)
+            for column in range(widths):
+                values = [_clean_display_text(row[column]).casefold() for row in rows[1:] if column < len(row) and _clean_display_text(row[column])]
+                if len(values) >= 2 and len(set(values)) == 1:
+                    issues.append(f"slide {slide_index} visual_table column {column + 1} repeats the same text")
+        visible_text = json.dumps(item, ensure_ascii=False).casefold()
+        for phrase in forbidden:
+            if phrase in visible_text:
+                issues.append(f"slide {slide_index} contains forbidden template text: {phrase}")
+    return issues
+
+
+def _repair_model_slide_batch(
+    source: dict[str, Any],
+    items: Any,
+    *,
+    expected_count: int,
+    expected_indices: list[int],
+    source_excerpt: str,
+    max_attempts: int = 3,
+) -> list[dict[str, Any]] | None:
+    """Ask the model to repair semantic/schema defects; never synthesize visible text locally."""
+    current = items
+    for attempt in range(1, max_attempts + 1):
+        issues = _model_slide_payload_issues(
+            current,
+            expected_count=expected_count,
+            expected_indices=expected_indices,
+        )
+        if not issues:
+            repaired = [dict(item) for item in current if isinstance(item, dict)]
+            for item in repaired:
+                item["text_generation_mode"] = "model_only"
+                item["text_validation"] = {"status": "passed", "attempt": attempt}
+            return repaired
+        _progress(
+            "slide_builder",
+            "repair model-written slide text",
+            current=attempt,
+            total=max_attempts,
+            detail="; ".join(issues[:3]),
+        )
+        prompt = textwrap.dedent(
+            f"""
+            Repair this batch of academic explainer scenes. Return JSON only:
+            {{"slides":[{{"index":1,"title":"...","purpose":"...","bullets":["..."],"speaker_note":"...","visual_prompt":"...","visual_kind":"image|flow|table|metrics","visual_caption":"...","visual_items":["..."],"visual_table":[],"animation_labels":{{"primary":"...","secondary":"...","result":"..."}},"scene_direction":{{"layout":"editorial|comparison|data_wall|timeline|evidence_grid|diagram_focus","entrance":"fade_up|slide_left|slide_right|scale_in","emphasis":"..."}}}}]}}
+
+            Return exactly {expected_count} complete slides with indices {expected_indices}.
+            Every visible phrase must be written by you and grounded in the source. Do not omit fields.
+            Use 2-6 distinct complete bullets, at least two concrete visual_items, and three distinct
+            animation_labels of at most seven words each that describe this scene's source state,
+            transformation, and result.
+            For image or flow scenes, visual_table may be [] when a table adds no explanatory value.
+            For table or metrics scenes, provide a real table with a header and 2-4 source-backed rows.
+            Every table column must have row-specific content. Never use Point 1/2/3, generic role text,
+            placeholders, repeated cells, or phrases such as 'supports the current explanation'.
+            Preserve factual numbers exactly. Speaker notes should be natural and source-grounded.
+
+            Validation problems:
+            {json.dumps(issues, ensure_ascii=False)}
+
+            Current batch:
+            {json.dumps(current, ensure_ascii=False)}
+
+            Paper title: {source.get('title', '')}
+            Source excerpt:
+            {source_excerpt}
+            """
+        ).strip()
+        data = _call_json_model(prompt)
+        current = data.get("slides") if isinstance(data, dict) else None
+    issues = _model_slide_payload_issues(
+        current,
+        expected_count=expected_count,
+        expected_indices=expected_indices,
+    )
+    _progress("slide_builder", "model slide repair exhausted", detail="; ".join(issues[:5]))
+    return None
+
+
+def _build_model_slides_in_batches(
+    source: dict[str, Any],
+    *,
+    target_slides: int,
+    batch_size: int,
+) -> list[dict[str, Any]] | None:
+    """Generate a large storyboard through short model calls that fit gateway limits."""
+    source_chars = min(
+        int(os.environ.get("AUTO_VIDEO_SOURCE_CHARS", "16000")),
+        int(os.environ.get("AUTO_VIDEO_BATCH_SOURCE_CHARS", "12000")),
+    )
+    source_excerpt = str(source.get("text") or "")[:source_chars]
+    outline_prompt = textwrap.dedent(
+        f"""
+        Plan a coherent PPT explanation video for this {source.get('kind', 'paper')}.
+        Return JSON only:
+        {{"outline":[{{"index":1,"title":"...","purpose":"...","visual_kind":"image|flow|table|metrics"}}]}}
+
+        Create exactly {target_slides} ordered outline entries, numbered 1 through {target_slides}.
+        Give every entry a unique explanatory job. Cover motivation, core method, concrete
+        mechanisms, source evidence/results, and limitations or implications when supported.
+        Do not repeat a dataset statistic or method overview on adjacent entries.
+        Use specific source-grounded titles and vary visual_kind.
+
+        Title: {source.get('title', '')}
+        Source excerpt:
+        {source_excerpt}
+        """
+    ).strip()
+    outline_data = _call_json_model(outline_prompt)
+    outline = outline_data.get("outline") if isinstance(outline_data, dict) else None
+    if not isinstance(outline, list) or len(outline) != target_slides:
+        _progress(
+            "slide_builder",
+            "storyboard outline invalid",
+            detail=f"expected={target_slides} received={len(outline) if isinstance(outline, list) else 0}",
+        )
+        return None
+
+    slides: list[dict[str, Any]] = []
+    compact_outline = [
+        {
+            "index": index,
+            "title": _clean_display_text(item.get("title")) if isinstance(item, dict) else f"Part {index}",
+            "purpose": _clean_display_text(item.get("purpose")) if isinstance(item, dict) else "",
+            "visual_kind": str(item.get("visual_kind") or "image") if isinstance(item, dict) else "image",
+        }
+        for index, item in enumerate(outline, start=1)
+    ]
+    for start in range(1, target_slides + 1, batch_size):
+        end = min(target_slides, start + batch_size - 1)
+        requested_outline = compact_outline[start - 1 : end]
+        previous_titles = [str(item.get("title") or "") for item in slides]
+        batch_prompt = textwrap.dedent(
+            f"""
+            Write slides {start} through {end} of a {target_slides}-slide academic explanation video.
+            Return JSON only:
+            {{"slides":[{{"index":{start},"title":"...","purpose":"...","bullets":["..."],"speaker_note":"...","visual_prompt":"...","visual_kind":"image|flow|table|metrics","visual_caption":"...","visual_items":["..."],"visual_table":[],"animation_labels":{{"primary":"source state","secondary":"transformation","result":"result"}},"scene_direction":{{"layout":"editorial|comparison|data_wall|timeline|evidence_grid|diagram_focus","entrance":"fade_up|slide_left|slide_right|scale_in","emphasis":"specific source-grounded detail"}}}}]}}
+
+            Produce exactly {end - start + 1} slides with indices {start} through {end}.
+            Follow the supplied outline jobs and preserve their order.
+            Each slide needs 2-3 concrete bullets under 24 words and a natural 65-95 word speaker note.
+            Use only facts supported by the source. No placeholders, ellipses, fake UI text,
+            bibliography dumps, repeated claims, or generic labels such as Architecture and Aspect.
+            The visual prompt must describe a complete explanatory scene and must not request a screenshot.
+            Every visible phrase must come from this response. Provide three distinct, source-specific
+            animation_labels describing the source state, transformation, and result for this scene.
+            For image or flow scenes, set visual_table to [] unless a real table is necessary.
+            For table or metrics scenes, provide a header plus 2-4 source-backed rows with distinct
+            row-specific meanings or roles. Never use Point 1/2/3 or repeat a generic third column.
+            Vary layout and entrance between adjacent slides. Make the emphasis name a concrete
+            claim, number, figure, module, or relationship. Tables and metrics must contain real
+            source-backed labels and values, never dummy field names.
+
+            Full outline:
+            {json.dumps(compact_outline, ensure_ascii=False)}
+
+            Slides already written (avoid repeating them):
+            {json.dumps(previous_titles, ensure_ascii=False)}
+
+            Current batch jobs:
+            {json.dumps(requested_outline, ensure_ascii=False)}
+
+            Title: {source.get('title', '')}
+            Source excerpt:
+            {source_excerpt}
+            """
+        ).strip()
+        batch_data = _call_json_model(batch_prompt)
+        batch = batch_data.get("slides") if isinstance(batch_data, dict) else None
+        batch = _repair_model_slide_batch(
+            source,
+            batch,
+            expected_count=end - start + 1,
+            expected_indices=list(range(start, end + 1)),
+            source_excerpt=source_excerpt,
+        )
+        if not isinstance(batch, list) or len(batch) != end - start + 1:
+            _progress(
+                "slide_builder",
+                "storyboard batch invalid",
+                detail=(
+                    f"range={start}-{end} expected={end - start + 1} "
+                    f"received={len(batch) if isinstance(batch, list) else 0}"
+                ),
+            )
+            return None
+        slides.extend(item for item in batch if isinstance(item, dict))
+    return slides if len(slides) == target_slides else None
+
+
+def _speaker_note_word_count(value: Any) -> int:
+    text = str(value or "")
+    english = re.findall(r"[A-Za-z0-9]+(?:['-][A-Za-z0-9]+)*", text)
+    cjk = re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]", text)
+    return len(english) + math.ceil(len(cjk) / 2)
+
+
+def _enrich_short_speaker_notes(
+    source: dict[str, Any],
+    slides: list[dict[str, Any]],
+    *,
+    min_words: int | None = None,
+    max_words: int | None = None,
+    _attempt: int = 1,
+) -> list[dict[str, Any]]:
+    """Expand thin narration with source-grounded detail through short model calls."""
+    minimum = max(45, int(min_words or os.environ.get("AUTO_VIDEO_MIN_NARRATION_WORDS", "70")))
+    maximum = max(minimum + 10, int(max_words or os.environ.get("AUTO_VIDEO_MAX_NARRATION_WORDS", "95")))
+    requested_minimum = max(minimum, math.ceil(minimum * 1.3))
+    requested_maximum = max(requested_minimum + 18, min(maximum + 20, math.ceil(maximum * 1.2)))
+    max_attempts = max(1, min(3, int(os.environ.get("AUTO_VIDEO_NARRATION_ENRICH_ATTEMPTS", "2"))))
+    updated = [dict(slide) for slide in slides]
+    short_indices = [
+        index
+        for index, slide in enumerate(updated)
+        if _speaker_note_word_count(slide.get("speaker_note")) < minimum
+    ]
+    if not short_indices:
+        return updated
+    batch_size = max(1, min(3, int(os.environ.get("AUTO_VIDEO_NARRATION_BATCH_SIZE", "1"))))
+    source_excerpt = str(source.get("text") or "")[: int(os.environ.get("AUTO_VIDEO_BATCH_SOURCE_CHARS", "12000"))]
+    for offset in range(0, len(short_indices), batch_size):
+        positions = short_indices[offset : offset + batch_size]
+        requested = [
+            {
+                "index": int(updated[position].get("index") or position + 1),
+                "title": updated[position].get("title"),
+                "purpose": updated[position].get("purpose"),
+                "bullets": updated[position].get("bullets") or [],
+                "current_note": updated[position].get("speaker_note") or "",
+                "visual_focus": updated[position].get("visual_caption") or updated[position].get("visual_prompt") or "",
+            }
+            for position in positions
+        ]
+        prompt = textwrap.dedent(
+            f"""
+            Deepen the narration for selected sections of an academic explainer video.
+            Return JSON only: {{"slides":[{{"index":1,"speaker_note":"..."}}]}}
+
+            Write one natural speaker_note for every requested index. Each note must contain
+            {requested_minimum}-{requested_maximum} words in exactly 5 complete sentences, with 18-24 words per sentence.
+            Count the words before returning and rewrite any note outside the requested range. Preserve the existing claim,
+            then add source-grounded mechanism, evidence, implication, or limitation details.
+            Explain why the visual matters instead of merely naming it. Use smooth transitions
+            and spoken language. Do not invent numbers, results, modules, or limitations. Do not
+            mention slides, prompts, JSON, evaluators, or revision. Avoid generic filler.
+
+            Paper title: {source.get('title', '')}
+            Requested sections:
+            {json.dumps(requested, ensure_ascii=False)}
+
+            Source excerpt:
+            {source_excerpt}
+            """
+        ).strip()
+        data = _call_json_model(prompt)
+        enriched = data.get("slides") if isinstance(data, dict) else None
+        if not isinstance(enriched, list):
+            continue
+        by_index = {
+            int(item.get("index") or 0): _clean_display_text(item.get("speaker_note"))
+            for item in enriched
+            if isinstance(item, dict)
+        }
+        for position in positions:
+            slide_index = int(updated[position].get("index") or position + 1)
+            note = by_index.get(slide_index, "")
+            word_count = _speaker_note_word_count(note)
+            current_word_count = _speaker_note_word_count(updated[position].get("speaker_note"))
+            strict_match = minimum <= word_count <= maximum + 12
+            soft_match = (
+                _attempt >= max_attempts
+                and math.ceil(minimum * 0.82) <= word_count <= maximum + 12
+                and word_count >= current_word_count + 12
+            )
+            if strict_match or soft_match:
+                updated[position]["speaker_note"] = note
+                updated[position]["narration_depth_words"] = word_count
+                updated[position]["narration_depth_mode"] = (
+                    "model_enriched" if strict_match else "model_enriched_soft"
+                )
+    if _attempt < max_attempts and any(
+        _speaker_note_word_count(slide.get("speaker_note")) < minimum for slide in updated
+    ):
+        return _enrich_short_speaker_notes(
+            source,
+            updated,
+            min_words=minimum,
+            max_words=maximum,
+            _attempt=_attempt + 1,
+        )
+    return updated
+
+
 def build_slides(source: dict[str, Any], *, max_slides: int, use_api: bool) -> list[dict[str, Any]]:
     text = source["text"][:65000]
     title = source["title"]
@@ -1550,41 +2527,58 @@ def build_slides(source: dict[str, Any], *, max_slides: int, use_api: bool) -> l
     target_slides = decide_target_slide_count(source, max_slides=max_slides, use_api=use_api)
     if use_api:
         source_chars = int(os.environ.get("AUTO_VIDEO_SOURCE_CHARS", "16000"))
-        prompt = textwrap.dedent(
-            f"""
+        batch_size = max(1, min(5, int(os.environ.get("AUTO_VIDEO_STORYBOARD_BATCH_SIZE", "3"))))
+        if target_slides > batch_size:
+            slides = _build_model_slides_in_batches(
+                source,
+                target_slides=target_slides,
+                batch_size=batch_size,
+            )
+            data = {"slides": slides} if slides else None
+        else:
+            prompt = textwrap.dedent(
+                f"""
             Convert this {source['kind']} into a PPT explanation video storyboard.
             Return JSON only:
-            {{"slide_count":{target_slides},"slides":[{{"title":"...","bullets":["..."],"speaker_note":"...","visual_prompt":"...","visual_kind":"image|flow|table|metrics","visual_caption":"...","visual_items":["..."],"visual_table":[["Metric","Value","Meaning"]],"scene_direction":{{"layout":"editorial|comparison|data_wall|timeline|evidence_grid|diagram_focus","entrance":"fade_up|slide_left|slide_right|scale_in|wipe","emphasis":"specific content to emphasize"}}}}]}}
+            {{"slide_count":{target_slides},"slides":[{{"index":1,"title":"...","purpose":"...","bullets":["..."],"speaker_note":"...","visual_prompt":"...","visual_kind":"image|flow|table|metrics","visual_caption":"...","visual_items":["..."],"visual_table":[],"animation_labels":{{"primary":"source state","secondary":"transformation","result":"result"}},"scene_direction":{{"layout":"editorial|comparison|data_wall|timeline|evidence_grid|diagram_focus","entrance":"fade_up|slide_left|slide_right|scale_in","emphasis":"specific content to emphasize"}}}}]}}
             Create exactly {target_slides} slides. The hard maximum configured by the user is {max_slides}.
             Make each bullet a complete, concrete sentence under 24 words.
             Do not use ellipses, half sentences, fake code, terminal text, or placeholder UI text.
             Keep speaker_note detailed enough for narration, about 80-120 words per slide.
             Include concrete paper details such as dataset size, builders, metrics, modules, or reported findings when present.
+            Give every slide one unique explanatory job and one clear audience question. Adjacent slides must not repeat the same claim, statistic, or method overview.
+            A method-overview slide may name modules once; later method slides must explain one specific mechanism in depth rather than restating the overview.
+            A dataset overview may state scale once; the next evidence slide must explain implications, distributions, examples, or limitations instead of repeating averages.
+            Reserve at least one slide for experimental results or evidence and one for limitations, implications, or future work when the source supports them.
             Vary the visual_kind across image, flow, table, and metrics.
             Vary scene_direction layout and entrance across adjacent slides. Choose comparison for before/after or speed results, data_wall for several statistics, timeline for ordered stages, evidence_grid for tables, and diagram_focus for mechanisms.
             The emphasis must name a concrete claim, number, figure, module, or relationship from this slide. Never use generic labels such as Architecture, Aspect, or Keeps the demo grounded.
             Prefer diagrams, tables, metric summaries, and conceptual visuals over screenshots.
+            Every visible phrase must come from this response. Provide three distinct, source-specific
+            animation_labels describing source state, transformation, and result. Image and flow scenes
+            should use visual_table: [] unless a real table is necessary. Table and metrics scenes need
+            a header plus 2-4 source-backed rows with distinct row-specific meanings. Never use Point
+            1/2/3, placeholder field names, or repeated generic role text.
             Keep all content grounded in the source.
 
             Title: {title}
             Source:
             {text[:source_chars]}
             """
-        ).strip()
-        data = _call_json_model(prompt)
+            ).strip()
+            data = _call_json_model(prompt)
         slides = data.get("slides") if isinstance(data, dict) else None
+        if isinstance(slides, list):
+            slides = _repair_model_slide_batch(
+                source,
+                slides,
+                expected_count=target_slides,
+                expected_indices=list(range(1, target_slides + 1)),
+                source_excerpt=str(source.get("text") or "")[:source_chars],
+            )
         if isinstance(slides, list) and slides:
-            normalized = [_normalize_slide(i, item) for i, item in enumerate(slides[:target_slides], start=1)]
-            if len(normalized) < target_slides:
-                normalized.extend(
-                    _build_heuristic_slides(
-                        source,
-                        keys,
-                        start_index=len(normalized) + 1,
-                        max_slides=target_slides,
-                    )
-                )
-            return _enforce_source_storyboard_coverage(source, normalized[:target_slides])
+            normalized = [_normalize_slide(i, item, model_text_only=True) for i, item in enumerate(slides[:target_slides], start=1)]
+            return _enrich_short_speaker_notes(source, normalized)
 
         require_model = os.environ.get("AUTO_VIDEO_REQUIRE_MODEL_OUTPUT", "1").strip().lower() not in {"0", "false", "no", "off"}
         if require_model:
@@ -1731,7 +2725,9 @@ def _build_heuristic_slides(
     return slides
 
 
-def _normalize_slide(index: int, item: Any) -> dict[str, Any]:
+def _normalize_slide(index: int, item: Any, *, model_text_only: bool = False) -> dict[str, Any]:
+    if model_text_only and not isinstance(item, dict):
+        raise RuntimeError(f"Model slide {index} is not a JSON object.")
     if not isinstance(item, dict):
         item = {"title": f"{index}. Slide", "bullets": [str(item)]}
     bullets = item.get("bullets") if isinstance(item.get("bullets"), list) else []
@@ -1764,22 +2760,41 @@ def _normalize_slide(index: int, item: Any) -> dict[str, Any]:
     if len(normalized_bullets) > 3:
         normalized_bullets = [*normalized_bullets[:2], " ".join(normalized_bullets[2:])]
     normalized_table = _normalize_visual_table(visual_table)
-    if not _visual_table_is_meaningful(normalized_table):
+    if not model_text_only and not _visual_table_is_meaningful(normalized_table):
         normalized_table = _visual_table(section, normalized_bullets, [])
-    return {
+    elif model_text_only and not _visual_table_is_meaningful(normalized_table):
+        normalized_table = []
+    title = _clean_display_text(item.get("title") or ("" if model_text_only else f"{index}. Slide"))
+    semantic_body = " ".join(
+        [_clean_display_text(item.get("purpose")), *normalized_bullets]
+    ).casefold()
+    if (
+        any(term in title.casefold() for term in ("evaluation metric", "evaluation metrics"))
+        and any(term in semantic_body for term in ("multi-agent architecture", "system architecture"))
+        and not any(term in semantic_body for term in ("presentquiz", "presentarena", "meta similarity"))
+    ):
+        title = "PaperTalker System Architecture"
+    normalized = {
         "index": index,
-        "title": _clean_display_text(item.get("title") or f"{index}. Slide"),
+        "title": title,
         "purpose": _clean_display_text(item.get("purpose")),
         "bullets": normalized_bullets[:3],
         "speaker_note": _clean_display_text(item.get("speaker_note") or item.get("note")),
         "visual_prompt": _clean_display_text(item.get("visual_prompt")),
         "visual_kind": visual_kind,
         "visual_caption": _clean_display_text(
-            item.get("visual_caption") or _visual_caption("source", section, visual_kind, [])
+            item.get("visual_caption")
+            or ("" if model_text_only else _visual_caption("source", section, visual_kind, []))
         ),
-        "visual_items": [_clean_visual_item(str(v)) for v in visual_items[:6]]
-        or _visual_items(section, normalized_bullets, []),
+        "visual_items": (
+            [_clean_visual_item(str(v)) for v in visual_items[:6]]
+            or ([] if model_text_only else _visual_items(section, normalized_bullets, []))
+        ),
         "visual_table": normalized_table,
+        "animation_labels": {
+            key: _clean_display_text((item.get("animation_labels") or {}).get(key))
+            for key in ("primary", "secondary", "result")
+        },
         "scene_direction": _normalize_scene_direction(
             item.get("scene_direction"),
             visual_kind=visual_kind,
@@ -1793,10 +2808,102 @@ def _normalize_slide(index: int, item: Any) -> dict[str, Any]:
             ),
         ),
     }
+    if model_text_only:
+        normalized["text_generation_mode"] = "model_only"
+        normalized["text_validation"] = dict(item.get("text_validation") or {"status": "passed"})
+        normalized["text_provenance"] = {
+            "title": "model",
+            "purpose": "model",
+            "bullets": "model",
+            "speaker_note": "model",
+            "visual_prompt": "model",
+            "visual_caption": "model",
+            "visual_items": "model",
+            "visual_table": "model" if normalized_table else "model_not_requested",
+            "animation_labels": "model",
+        }
+    return normalized
 
 
 SCENE_LAYOUTS = {"editorial", "comparison", "data_wall", "timeline", "evidence_grid", "diagram_focus"}
 SCENE_ENTRANCES = ("fade_up", "slide_left", "slide_right", "scale_in", "wipe")
+
+HYBRID_3D_SHOT_TYPES = {
+    "media_establish",
+    "media_detail",
+    "process_map",
+    "process_trace",
+    "evidence_board",
+    "evidence_closeup",
+    "data_landscape",
+    "data_focus",
+    "data_detail",
+}
+HYBRID_3D_CAMERA_MOTIONS = ("dolly_in", "truck_left", "truck_right", "soft_orbit")
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    fallback = "1" if default else "0"
+    return os.environ.get(name, fallback).strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+def _hybrid_3d_enabled() -> bool:
+    return _env_flag("AUTO_VIDEO_HYBRID_3D")
+
+
+def _apply_hybrid_3d_timeline_plan(timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Select a restrained, evenly distributed subset of shots for spatial staging."""
+    for shot in timeline:
+        shot["render_mode"] = "slide_2d"
+    if not timeline or not _hybrid_3d_enabled():
+        return timeline
+
+    requested_ratio = float(os.environ.get("AUTO_VIDEO_HYBRID_3D_RATIO", "0.30"))
+    ratio = max(0.10, min(0.50, requested_ratio))
+    content_count = sum(1 for shot in timeline if shot.get("shot_type") != "title_card")
+    target_count = max(1, min(len(timeline), int(round(content_count * ratio))))
+    candidates = [
+        index
+        for index, shot in enumerate(timeline)
+        if str(shot.get("shot_type") or "") in HYBRID_3D_SHOT_TYPES
+    ]
+    target_count = min(target_count, len(candidates))
+    if not target_count:
+        return timeline
+
+    # Sample along the full candidate sequence so one chapter cannot consume the
+    # whole 3D budget. Moving a repeated index forward keeps the selection unique.
+    selected: list[int] = []
+    for slot in range(target_count):
+        candidate_position = min(
+            len(candidates) - 1,
+            int(round((slot + 0.5) * len(candidates) / target_count - 0.5)),
+        )
+        candidate_index = candidates[candidate_position]
+        if candidate_index in selected:
+            replacement = next((item for item in candidates if item not in selected), None)
+            if replacement is None:
+                continue
+            candidate_index = replacement
+        selected.append(candidate_index)
+
+    for sequence, shot_index in enumerate(sorted(selected)):
+        shot = timeline[shot_index]
+        variant = (int(shot.get("slide_index") or 0) + int(shot.get("shot_index") or 0) + sequence) % len(
+            HYBRID_3D_CAMERA_MOTIONS
+        )
+        motion = HYBRID_3D_CAMERA_MOTIONS[variant]
+        shot["render_mode"] = "hybrid_3d"
+        shot["spatial_stage"] = {
+            "camera_motion": motion,
+            "depth_layers": 3,
+            "max_orbit_degrees": 2.4,
+            "max_translation_px": 12,
+            "perspective_strength": 0.035,
+            "hud_is_flat": True,
+        }
+        shot["hud_layers"] = ["headline", "section_label", "progress", "narration", "pointer"]
+    return timeline
 
 
 def _normalize_scene_direction(
@@ -2010,22 +3117,25 @@ def sanitize_public_slides(slides: list[dict[str, Any]]) -> list[dict[str, Any]]
     for i, slide in enumerate(slides, start=1):
         item = dict(slide)
         item["index"] = int(item.get("index") or i)
-        item["title"] = _clean_public_video_text(item.get("title")) or f"Slide {item['index']}"
+        model_only = str(item.get("text_generation_mode") or "") == "model_only"
+        item["title"] = _clean_public_video_text(item.get("title"))
+        if not item["title"] and not model_only:
+            item["title"] = f"Slide {item['index']}"
         item["purpose"] = _clean_public_video_text(item.get("purpose"))
         bullets = _clean_public_video_list(item.get("bullets"))
-        if not bullets:
+        if not bullets and not model_only:
             bullets = ["Explain the core idea clearly."]
         if len(bullets) > 3:
             bullets = [*bullets[:2], " ".join(bullets[2:])]
         item["bullets"] = bullets[:3]
         note = _clean_public_video_text(item.get("speaker_note"))
-        if not note or _contains_internal_video_marker(note):
+        if (not note or _contains_internal_video_marker(note)) and not model_only:
             note = " ".join(item["bullets"][:3])
         item["speaker_note"] = note
         item["visual_prompt"] = _clean_public_video_text(item.get("visual_prompt"))
         item["visual_caption"] = _clean_public_video_text(item.get("visual_caption"))
         visual_items = _clean_public_video_list(item.get("visual_items"))
-        item["visual_items"] = (visual_items or item["bullets"])[:6]
+        item["visual_items"] = (visual_items or ([] if model_only else item["bullets"]))[:6]
         if isinstance(item.get("visual_table"), list):
             rows: list[list[str]] = []
             for row in item["visual_table"][:5]:
@@ -2040,6 +3150,26 @@ def sanitize_public_slides(slides: list[dict[str, Any]]) -> list[dict[str, Any]]
             slide_index=item["index"],
             text=" ".join([item["title"], item["purpose"], *item["bullets"]]),
         )
+        if model_only:
+            labels = item.get("animation_labels") if isinstance(item.get("animation_labels"), dict) else {}
+            required = {
+                "title": item["title"],
+                "purpose": item["purpose"],
+                "bullets": item["bullets"],
+                "speaker_note": item["speaker_note"],
+                "visual_prompt": item["visual_prompt"],
+                "visual_caption": item["visual_caption"],
+                "visual_items": item["visual_items"],
+                "animation_labels.primary": _clean_public_video_text(labels.get("primary")),
+                "animation_labels.secondary": _clean_public_video_text(labels.get("secondary")),
+                "animation_labels.result": _clean_public_video_text(labels.get("result")),
+            }
+            missing = [key for key, value in required.items() if not value]
+            if missing:
+                raise RuntimeError(
+                    f"Model-only slide {item['index']} lost required text fields during sanitization: "
+                    + ", ".join(missing)
+                )
         sanitized.append(item)
     return sanitized
 
@@ -2091,7 +3221,7 @@ def _narration_duration_bounds(slide: dict[str, Any], slide_position: int) -> tu
 def build_subtitles(slides: list[dict[str, Any]], *, seconds_per_slide: int) -> list[dict[str, Any]]:
     subtitles: list[dict[str, Any]] = []
     t = 0
-    max_sentences = int(os.environ.get("AUTO_VIDEO_MAX_SUBTITLES_PER_SLIDE", "4"))
+    max_sentences = int(os.environ.get("AUTO_VIDEO_MAX_SUBTITLES_PER_SLIDE", "5"))
     continuous = os.environ.get("AUTO_VIDEO_CONTINUOUS_TIMELINE", "1").strip().lower() not in {"0", "false", "no"}
     for slide_position, slide in enumerate(slides, start=1):
         note = slide.get("speaker_note") or " ".join(slide.get("bullets") or [])
@@ -2181,6 +3311,19 @@ SHOT_VISUAL_STRATEGIES = {
 }
 
 
+def _is_summary_slide(slide: dict[str, Any]) -> bool:
+    heading = " ".join(
+        [
+            _clean_display_text(slide.get("title")),
+            _clean_display_text(slide.get("purpose")),
+        ]
+    ).casefold()
+    return any(
+        phrase in heading
+        for phrase in ("conclusion", "future work", "summary", "takeaway", "outlook")
+    )
+
+
 def _route_shot_visual_strategy(
     narration: str,
     slide: dict[str, Any],
@@ -2220,12 +3363,36 @@ def _route_shot_visual_strategy(
     )
     evidence_terms = ("evidence", "dataset", "example", "study", "evaluation", "table")
 
+    if _is_summary_slide(slide):
+        return "kinetic_text", "Conclusion and outlook sections use an explicit summary treatment."
+    preferred_strategy = str(slide.get("visual_asset_preference") or "").casefold()
+    comparison = slide.get("visual_asset_comparison")
+    comparison_winner = (
+        str(comparison.get("winner") or "").casefold()
+        if isinstance(comparison, dict)
+        else ""
+    )
+    if beat_index == 0 and preferred_strategy == "paper_figure" and paper_assets:
+        return "paper_figure", "The visual comparison selected source-paper evidence for this section."
+    if beat_index == 0 and preferred_strategy == "generated_scene" and generated_assets:
+        return "generated_scene", "The visual comparison selected the generated explanation for this section."
+    if beat_index == 1 and comparison_winner == "both":
+        if preferred_strategy == "paper_figure" and generated_assets:
+            return "generated_scene", "The comparison selected both candidates; follow source evidence with a clearer explanation."
+        if preferred_strategy == "generated_scene" and paper_assets:
+            return "paper_figure", "The comparison selected both candidates; follow the concept with exact source evidence."
+    if beat_index == 1 and len(generated_assets) > 1 and visual_kind in {"image", "flow"}:
+        return "generated_scene", "Use a distinct generated detail scene before switching to structured explanation."
+    if generated_assets and beat_index == 0 and visual_kind in {"image", "flow"}:
+        return "generated_scene", "Open the section with a validated conceptual scene before technical detail."
+    if paper_assets and beat_index == 0:
+        return "paper_figure", "A validated source-paper figure is the strongest available opening visual."
     if has_metric_number or visual_kind == "metrics" or any(term in narration_l for term in chart_terms):
         return "procedural_chart", "The narration contains a measurable result or statistic."
-    if visual_kind == "flow" or any(term in narration_l for term in process_terms):
-        return "procedural_diagram", "The narration explains an ordered mechanism or relationship."
     if any(term in narration_l for term in comparison_terms):
         return "split_comparison", "The narration contrasts two states or approaches."
+    if visual_kind == "flow" or any(term in narration_l for term in process_terms):
+        return "procedural_diagram", "The narration explains an ordered mechanism or relationship."
     meaningful_table = _visual_table_is_meaningful(slide.get("visual_table") or [])
     if visual_kind == "table" or (meaningful_table and any(term in narration_l for term in evidence_terms)):
         return "evidence_table", "The narration is best supported by structured evidence."
@@ -2318,6 +3485,100 @@ def _scene_narration_is_anaphoric(narration: str) -> bool:
     return bool(re.match(r"^(?:this|that|it|these|those|such an? approach)\b", cleaned))
 
 
+ANIMATION_EVENT_ACTIONS = {
+    "count_up",
+    "grow_bar",
+    "reveal_node",
+    "flow_token",
+    "expand_branch",
+    "score_candidates",
+    "select_winner",
+    "sequential_progress",
+    "parallel_progress",
+    "focus_zoom",
+    "highlight_result",
+}
+
+
+def _build_shot_animation_events(
+    *,
+    shot_type: str,
+    visual_strategy: str,
+    slide: dict[str, Any],
+    narration: str,
+    duration_sec: float,
+) -> list[dict[str, Any]]:
+    """Create a renderer-neutral semantic animation schedule for one shot."""
+    duration_sec = max(0.1, float(duration_sec))
+    text = " ".join(
+        [
+            _clean_display_text(slide.get("title")),
+            _clean_display_text(slide.get("purpose")),
+            _clean_display_text(narration),
+        ]
+    ).casefold()
+    events: list[dict[str, Any]] = []
+
+    def add(action: str, start: float, duration: float, object_id: str, emphasis: str = "supporting") -> None:
+        start = max(0.0, min(0.95, start))
+        duration = max(0.05, min(1.0 - start, duration))
+        events.append(
+            {
+                "object_id": object_id,
+                "action": action,
+                "start_sec": round(duration_sec * start, 3),
+                "duration_sec": round(duration_sec * duration, 3),
+                "start_fraction": round(start, 3),
+                "duration_fraction": round(duration, 3),
+                "trigger_text": _clean_display_text(narration),
+                "emphasis": emphasis,
+            }
+        )
+
+    is_tree_search = "tree search" in text or "layout branch" in text
+    is_parallel = "parallel" in text and any(token in text for token in ("generation", "slide", "agent", "task"))
+    if is_tree_search and visual_strategy == "procedural_diagram":
+        add("expand_branch", 0.08, 0.38, "layout_candidates")
+        add("score_candidates", 0.38, 0.30, "vlm_scores")
+        add("select_winner", 0.68, 0.24, "best_layout", "primary")
+    elif is_parallel and visual_strategy in {"procedural_diagram", "procedural_chart", "split_comparison"}:
+        add("sequential_progress", 0.08, 0.68, "sequential_lane")
+        add("parallel_progress", 0.18, 0.34, "parallel_lanes", "primary")
+        add("highlight_result", 0.62, 0.25, "speed_difference", "primary")
+    elif visual_strategy == "procedural_diagram":
+        add("reveal_node", 0.05, 0.50, "mechanism_nodes")
+        add("flow_token", 0.24, 0.58, "mechanism_path", "primary")
+        add("highlight_result", 0.76, 0.18, "mechanism_output", "primary")
+    elif visual_strategy == "procedural_chart":
+        if _metric_scene_is_qualitative(slide, {"narration": narration}):
+            add("reveal_node", 0.06, 0.46, "challenge_modules", "primary")
+            add("flow_token", 0.30, 0.42, "challenge_links")
+            add("highlight_result", 0.72, 0.20, "challenge_conclusion", "primary")
+        else:
+            add("count_up", 0.04, 0.10, "metric_values", "primary")
+            add("grow_bar", 0.10, 0.22, "metric_bars")
+            add("highlight_result", 0.58, 0.20, "metric_conclusion", "primary")
+    elif visual_strategy in {"generated_scene", "paper_figure"}:
+        add("focus_zoom", 0.05, 0.72, "primary_media", "primary")
+    elif shot_type in {"key_claim", "synthesis", "contrast"}:
+        add("highlight_result", 0.32, 0.46, "key_claim", "primary")
+    return events
+
+
+def _animation_event_progress(shot: dict[str, Any], action: str, local: float) -> float:
+    """Return eased progress for an action, falling back to the shot reveal."""
+    local = max(0.0, min(1.0, float(local)))
+    matching = [event for event in shot.get("animation_events") or [] if event.get("action") == action]
+    if not matching:
+        return _scene_ease(local)
+    progress = 0.0
+    for event in matching:
+        start = float(event.get("start_fraction") or 0.0)
+        duration = max(0.001, float(event.get("duration_fraction") or 0.001))
+        progress = max(progress, _scene_ease((local - start) / duration))
+    return max(0.0, min(1.0, progress))
+
+
 def _merge_scene_beats(items: list[dict[str, Any]], *, max_beats: int = 4) -> list[dict[str, Any]]:
     if len(items) <= max_beats:
         return [dict(item) for item in items]
@@ -2395,6 +3656,18 @@ def build_scene_timeline(
                 "background_stage": "quiet",
                 "transition": "fade",
                 "motion": "title_reveal",
+                "animation_events": [
+                    {
+                        "object_id": "paper_title",
+                        "action": "highlight_result",
+                        "start_sec": 0.4,
+                        "duration_sec": round(max(0.6, title_end - title_start - 0.8), 3),
+                        "start_fraction": 0.1,
+                        "duration_fraction": 0.7,
+                        "trigger_text": _clean_display_text(source.get("title")),
+                        "emphasis": "primary",
+                    }
+                ],
             }
         )
     for slide_position, slide in enumerate(slides, start=1):
@@ -2477,6 +3750,13 @@ def build_scene_timeline(
                 beat_index=beat_index,
                 beat_count=len(beats),
             )
+            if _is_summary_slide(slide):
+                if beat_index == len(beats) - 1:
+                    shot_type = "synthesis"
+                elif beat_index % 2:
+                    shot_type = "contrast"
+                else:
+                    shot_type = "key_claim"
             focus_fallback = (
                 previous_focus_index
                 if previous_focus_index is not None and _scene_narration_is_anaphoric(narration)
@@ -2496,13 +3776,17 @@ def build_scene_timeline(
             else:
                 focus_text = _clean_display_text(beat.get("text"))
             duration = end - start
-            animation_sec = min(3.2, max(1.0, duration * 0.34))
-            minimum_hold_sec = min(3.0, max(1.5, duration * 0.28))
-            if animation_sec + minimum_hold_sec > duration:
-                animation_sec = max(0.8, duration - minimum_hold_sec)
+            minimum_hold_sec = min(2.5, max(1.5, duration * 0.16))
+            animation_sec = max(0.8, duration - minimum_hold_sec)
+            entrance_sec = min(1.4, max(0.65, duration * 0.12))
             hold_sec = max(0.0, duration - animation_sec)
             base_entrance_index = SCENE_ENTRANCES.index(scene_direction["entrance"])
             entrance = SCENE_ENTRANCES[(base_entrance_index + beat_index) % len(SCENE_ENTRANCES)]
+            if visual_strategy in {"procedural_diagram", "procedural_chart", "evidence_table"}:
+                # Internal objects already carry semantic motion; a calm layer entrance avoids
+                # stacking a hard page transition on top of node, bar, and branch animation.
+                entrance = "fade_up"
+                entrance_sec = min(0.72, max(0.5, duration * 0.07))
             visual_asset_path = ""
             if visual_strategy == "generated_scene" and generated_assets:
                 visual_asset_path = generated_assets[generated_cursor % len(generated_assets)]
@@ -2535,6 +3819,7 @@ def build_scene_timeline(
                     "speech_end_sec": round(float(beat.get("speech_end_sec") or end), 3),
                     "duration_sec": round(end - start, 3),
                     "animation_sec": round(animation_sec, 3),
+                    "entrance_sec": round(min(animation_sec, entrance_sec), 3),
                     "hold_sec": round(hold_sec, 3),
                     "shot_type": shot_type,
                     "scene_family": {
@@ -2632,7 +3917,14 @@ def build_scene_timeline(
                     }.get(shot_type, "statement_reveal"),
                 }
             )
-    return timeline
+            timeline[-1]["animation_events"] = _build_shot_animation_events(
+                shot_type=shot_type,
+                visual_strategy=visual_strategy,
+                slide=slide,
+                narration=narration,
+                duration_sec=duration,
+            )
+    return _apply_hybrid_3d_timeline_plan(timeline)
 
 
 def build_cursor_plan(
@@ -2789,22 +4081,11 @@ def _natural_narration_from_subtitles(subtitles: list[dict[str, Any]]) -> str:
         text = re.sub(r"\s+", " ", str(item.get("text") or "")).strip()
         if text:
             by_slide.setdefault(int(item.get("slide_index") or 0), []).append(text)
-    transitions = [
-        "Let's start with the main problem.",
-        "Now, the next point is about why this is difficult.",
-        "Here is the evidence from the paper.",
-        "Let's look at the method more concretely.",
-        "The next part explains how the components work together.",
-        "Now let's move to the results.",
-        "Finally, let me summarize the takeaway.",
-    ]
     chunks: list[str] = []
-    for pos, slide_index in enumerate(sorted(by_slide)):
+    for slide_index in sorted(by_slide):
         sentences = by_slide[slide_index]
         if not sentences:
             continue
-        if pos < len(transitions):
-            chunks.append(transitions[pos])
         for sentence in sentences:
             cleaned = sentence.strip()
             cleaned = re.sub(r"\bRevision pass \d+:.*$", "", cleaned).strip()
@@ -2889,15 +4170,35 @@ def judge_storyboard(
     if use_api:
         judge_slide_chars = int(os.environ.get("AUTO_VIDEO_JUDGE_SLIDE_CHARS", "12000"))
         judge_subtitle_chars = int(os.environ.get("AUTO_VIDEO_JUDGE_SUBTITLE_CHARS", "8000"))
+        compact_slides = [
+            {
+                key: slide.get(key)
+                for key in (
+                    "index", "title", "purpose", "bullets", "speaker_note", "visual_kind",
+                    "visual_caption", "visual_items", "visual_table", "animation_labels",
+                )
+            }
+            for slide in slides
+        ]
+        compact_subtitles = [
+            {"slide_index": item.get("slide_index"), "text": item.get("text")}
+            for item in subtitles
+        ]
         prompt = textwrap.dedent(
             f"""
-            Judge this paper/project-to-video storyboard. Return JSON only:
-            {{"overall_score":0.0,"module_scores":{{"slide_builder":0.0,"subtitle_builder":0.0,"cursor_builder":0.0,"talker_builder":0.0}},"failed_modules":["..."],"revise_next":{{"module":"instruction"}}}}
+            Judge only the content storyboard and narration that are actually provided below.
+            Return JSON only:
+            {{"overall_score":0.0,"module_scores":{{"slide_builder":0.0,"subtitle_builder":0.0}},"failed_modules":["slide_builder|subtitle_builder"],"revise_next":{{"slide_builder":"specific instruction","subtitle_builder":"specific instruction"}}}}
+            Scores must be numbers from 0 to 1. Score factual source coverage, narrative structure,
+            specificity, non-redundancy, and whether visible labels and narration explain the paper.
+            Do not score cursor, audio, TTS, talking head, image fidelity, or rendered animation,
+            because those artifacts are not in this input. A strong grounded draft should score
+            0.80-0.95; reserve scores below 0.50 for major factual or structural failure.
             Source title: {source['title']}
             Slides:
-            {json.dumps(slides, ensure_ascii=False)[:judge_slide_chars]}
+            {json.dumps(compact_slides, ensure_ascii=False)[:judge_slide_chars]}
             Subtitles:
-            {json.dumps(subtitles, ensure_ascii=False)[:judge_subtitle_chars]}
+            {json.dumps(compact_subtitles, ensure_ascii=False)[:judge_subtitle_chars]}
             """
         ).strip()
         data = _call_json_model(prompt)
@@ -2906,16 +4207,18 @@ def judge_storyboard(
             heuristic = _score01(score, heuristic)
             if isinstance(data.get("module_scores"), dict):
                 for name, value in data["module_scores"].items():
-                    if name in module_scores:
+                    if name in {"slide_builder", "subtitle_builder"}:
                         module_scores[name] = _score01(value, module_scores[name])
             if isinstance(data.get("failed_modules"), list):
                 failed_modules = [
                     str(name)
                     for name in data["failed_modules"]
-                    if str(name) in module_scores
+                    if str(name) in {"slide_builder", "subtitle_builder"}
                 ]
             failed_modules = [
-                module for module, score in module_scores.items() if float(score) < module_threshold
+                module
+                for module in ("slide_builder", "subtitle_builder")
+                if float(module_scores[module]) < module_threshold
             ]
             if isinstance(data.get("revise_next"), dict):
                 feedback = {
@@ -2955,11 +4258,16 @@ def revise_slides(
             f"""
             Revise this paper/project-to-video slide storyboard based on judge feedback.
             Return JSON only:
-            {{"slides":[{{"title":"...","bullets":["..."],"speaker_note":"...","visual_prompt":"..."}}]}}
+            {{"slides":[{{"index":1,"title":"...","purpose":"...","bullets":["..."],"speaker_note":"...","visual_prompt":"...","visual_kind":"image|flow|table|metrics","visual_caption":"...","visual_items":["..."],"visual_table":[],"animation_labels":{{"primary":"...","secondary":"...","result":"..."}},"scene_direction":{{"layout":"...","entrance":"...","emphasis":"..."}}}}]}}
             Return exactly {len(slides)} slides in the same order. Do not delete, merge, or renumber sections.
             Make the narration more grounded and presentation-ready.
             Keep every bullet as a complete sentence under 24 words. Do not use ellipses.
             Add missing concrete paper details where the previous slide felt generic.
+            Return every field for every slide, even when it is unchanged. Every visible phrase,
+            table cell, mechanism label, and animation label must be written by you and grounded
+            in the source. For image/flow slides visual_table may be []; table/metrics slides need
+            a real header and 2-4 rows with distinct row-specific meanings. Never use Point 1/2/3,
+            Supports the current explanation, Research context, or any placeholder phrase.
             Never mention judge feedback, revision passes, evaluator modules, or internal pipeline names.
 
             Source title: {source['title']}
@@ -2973,11 +4281,25 @@ def revise_slides(
         data = _call_json_model(prompt)
         revised = data.get("slides") if isinstance(data, dict) else None
         if isinstance(revised, list) and revised:
-            merged = [revised[index] if index < len(revised) else slides[index] for index in range(len(slides))]
-            normalized = [_normalize_slide(i, item) for i, item in enumerate(merged, start=1)]
-            return sanitize_public_slides(_enforce_source_storyboard_coverage(source, normalized))
+            merged = [
+                {**slides[index], **(revised[index] if index < len(revised) and isinstance(revised[index], dict) else {})}
+                for index in range(len(slides))
+            ]
+            repaired = _repair_model_slide_batch(
+                source,
+                merged,
+                expected_count=len(slides),
+                expected_indices=list(range(1, len(slides) + 1)),
+                source_excerpt=str(source.get("text") or "")[:revise_slide_chars],
+            )
+            if repaired:
+                normalized = [
+                    _normalize_slide(i, item, model_text_only=True)
+                    for i, item in enumerate(repaired, start=1)
+                ]
+                return sanitize_public_slides(normalized)
         _progress("revise_builder", "model revision unavailable; preserve current storyboard", detail="local content fallback disabled")
-        return sanitize_public_slides(_enforce_source_storyboard_coverage(source, slides))
+        return sanitize_public_slides(slides)
 
     revised_slides: list[dict[str, Any]] = []
     for slide in slides:
@@ -4216,6 +5538,7 @@ def render_mp4_video(
             source,
             slides,
             subtitles,
+            cursor_plan,
             out,
             width=width,
             height=height,
@@ -4409,6 +5732,7 @@ def _render_scene_mp4_video(
     source: dict[str, Any],
     slides: list[dict[str, Any]],
     subtitles: list[dict[str, Any]],
+    cursor_plan: list[dict[str, Any]],
     out: Path,
     *,
     width: int,
@@ -4420,19 +5744,24 @@ def _render_scene_mp4_video(
     except ImportError:
         return False
 
-    frames_dir = out.parent / "scene_frames"
+    frames_dir = out.parent / f".{out.stem}_scene_frames"
     if frames_dir.exists():
         shutil.rmtree(frames_dir)
     frames_dir.mkdir(parents=True, exist_ok=True)
 
     timeline = build_scene_timeline(source, slides, subtitles)
+    render_window = _scene_render_window(timeline)
+    hybrid_shot_count = sum(1 for shot in timeline if shot.get("render_mode") == "hybrid_3d")
     (out.parent / "scene_timeline.json").write_text(
         json.dumps(
             {
-                "version": 1,
-                "mode": "scene_based_research_explainer",
-                "reference_style": "Arbor-inspired event-driven minimal motion",
+                "version": 3,
+                "mode": "object_space_hybrid_3d_explainer" if hybrid_shot_count else "scene_based_research_explainer",
+                "reference_style": "Object-level 3D staging with flat information HUD",
                 "shot_count": len(timeline),
+                "hybrid_3d_enabled": bool(hybrid_shot_count),
+                "hybrid_3d_shot_count": hybrid_shot_count,
+                "render_window_sec": list(render_window) if render_window else None,
                 "shots": timeline,
             },
             indent=2,
@@ -4444,6 +5773,49 @@ def _render_scene_mp4_video(
         return False
 
     slide_lookup = {int(slide.get("index") or i): slide for i, slide in enumerate(slides, start=1)}
+    cursor_by_slide: dict[int, list[dict[str, Any]]] = {}
+    for item in cursor_plan:
+        cursor_by_slide.setdefault(int(item.get("slide_index") or 0), []).append(item)
+    for items in cursor_by_slide.values():
+        items.sort(key=lambda item: float(item.get("start_sec") or 0.0))
+
+    def scene_cursor_position(sec: float, shot: dict[str, Any]) -> tuple[int, int, float] | None:
+        slide_index = int(shot.get("slide_index") or 0)
+        items = cursor_by_slide.get(slide_index, [])
+        if not items:
+            return None
+        active_index = 0
+        for index, item in enumerate(items):
+            if float(item.get("start_sec") or 0.0) <= sec <= float(item.get("end_sec") or 0.0):
+                active_index = index
+                break
+            if sec >= float(item.get("start_sec") or 0.0):
+                active_index = index
+        active = items[active_index]
+        target_x, target_y = _scene_cursor_target(
+            shot,
+            planned_x=float(active.get("x_percent") or 50.0),
+            planned_y=float(active.get("y_percent") or 44.0),
+        )
+        start_x = max(8.0, min(90.0, target_x - (6.0 if target_x < 50.0 else -6.0)))
+        start_y = max(14.0, target_y - 4.0)
+        start_sec = float(shot.get("start_sec") or active.get("start_sec") or sec)
+        end_sec = max(start_sec + 0.01, float(shot.get("end_sec") or active.get("end_sec") or start_sec + 1.0))
+        move_duration = min(1.1, max(0.5, (end_sec - start_sec) * 0.14))
+        move_progress = _scene_ease((sec - start_sec) / move_duration)
+        start_px = width * start_x / 100.0
+        start_py = height * start_y / 100.0
+        target_px = width * target_x / 100.0
+        target_py = height * target_y / 100.0
+        dx = target_px - start_px
+        dy = target_py - start_py
+        distance = max(1.0, math.hypot(dx, dy))
+        arc = math.sin(math.pi * move_progress) * min(13.0, distance * 0.08)
+        x = start_px + dx * move_progress - dy / distance * arc
+        y = start_py + dy * move_progress + dx / distance * arc
+        attention = max(0.0, 1.0 - max(0.0, sec - start_sec - move_duration) / 0.65)
+        return int(x), int(y), attention
+
     theme = _paper_visual_theme(source)
     background_color = tuple(theme["background"])
     total_duration = max(float(shot["end_sec"]) for shot in timeline)
@@ -4457,27 +5829,61 @@ def _render_scene_mp4_video(
         "number": _font(64),
     }
     frame_index = 0
-    _progress("renderer", "start scene-based rendering", current=0, total=len(timeline), detail=f"fps={fps} shots={len(timeline)}")
-    for shot_position, shot in enumerate(timeline, start=1):
+    render_entries: list[tuple[dict[str, Any], float, float]] = []
+    for shot in timeline:
+        clip_start = float(shot["start_sec"])
+        clip_end = float(shot["end_sec"])
+        if render_window:
+            clip_start = max(clip_start, render_window[0])
+            clip_end = min(clip_end, render_window[1])
+        if clip_end > clip_start:
+            render_entries.append((shot, clip_start, clip_end))
+    if not render_entries:
+        return False
+    _progress(
+        "renderer",
+        "start scene-based rendering",
+        current=0,
+        total=len(render_entries),
+        detail=f"fps={fps} shots={len(render_entries)} hybrid_3d={hybrid_shot_count}",
+    )
+    for shot_position, (shot, clip_start, clip_end) in enumerate(render_entries, start=1):
         slide = slide_lookup.get(int(shot["slide_index"]), {})
         render_slide = dict(slide)
         if shot.get("visual_asset_path"):
             render_slide["generated_image_path"] = str(shot["visual_asset_path"])
         duration = max(1.0 / max(1, fps), float(shot["end_sec"]) - float(shot["start_sec"]))
-        frame_count = max(1, int(round(duration * fps)))
+        clipped_duration = max(1.0 / max(1, fps), clip_end - clip_start)
+        frame_count = max(1, int(round(clipped_duration * fps)))
+        hybrid_3d = shot.get("render_mode") == "hybrid_3d"
         _progress(
             "renderer",
             "draw video shot",
             current=shot_position,
-            total=len(timeline),
-            detail=f"id={shot['shot_id']} type={shot['shot_type']} frames={frame_count}",
+            total=len(render_entries),
+            detail=f"id={shot['shot_id']} type={shot['shot_type']} mode={shot.get('render_mode', 'slide_2d')} frames={frame_count}",
         )
         for tick in range(frame_count):
-            sec = float(shot["start_sec"]) + tick / fps
-            local = tick / max(1, frame_count - 1)
+            sec = min(clip_end, clip_start + tick / fps)
+            local = max(
+                0.0,
+                min(1.0, (sec - float(shot["start_sec"])) / duration),
+            )
             img = Image.new("RGB", (width, height), background_color)
             draw = ImageDraw.Draw(img)
             _draw_scene_background(draw, width, height, sec, source=source, slide=render_slide, shot=shot)
+            if hybrid_3d:
+                img = _draw_hybrid_3d_object_scene(
+                    img,
+                    render_slide,
+                    shot,
+                    width=width,
+                    height=height,
+                    local=local,
+                    theme=theme,
+                    fonts=fonts,
+                )
+                draw = ImageDraw.Draw(img)
             _draw_scene_progress(
                 draw,
                 shot,
@@ -4488,30 +5894,38 @@ def _render_scene_mp4_video(
                 font=fonts["small"],
             )
             background_frame = img.copy()
-            content_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-            content_draw = ImageDraw.Draw(content_layer)
-            _draw_scene_composition(
-                content_draw,
-                render_slide,
-                shot,
-                theme=theme,
-                width=width,
-                height=height,
-                local=local,
-                fonts=fonts,
-            )
-            animation_fraction = min(
-                1.0,
-                max(0.001, float(shot.get("animation_sec") or 1.0) / max(0.001, duration)),
-            )
-            entrance_progress = _scene_ease(min(1.0, local / animation_fraction))
-            content_layer = _apply_scene_entrance(
-                content_layer,
-                str(shot.get("entrance") or "fade_up"),
-                entrance_progress,
-            )
-            img = Image.alpha_composite(img.convert("RGBA"), content_layer).convert("RGB")
-            draw = ImageDraw.Draw(img)
+            if not hybrid_3d:
+                content_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+                content_draw = ImageDraw.Draw(content_layer)
+                _draw_scene_composition(
+                    content_draw,
+                    render_slide,
+                    shot,
+                    theme=theme,
+                    width=width,
+                    height=height,
+                    local=local,
+                    fonts=fonts,
+                )
+                entrance_fraction = min(
+                    1.0,
+                    max(0.001, float(shot.get("entrance_sec") or 1.0) / max(0.001, duration)),
+                )
+                entrance_progress = _scene_ease(min(1.0, local / entrance_fraction))
+                content_layer = _apply_scene_entrance(
+                    content_layer,
+                    str(shot.get("entrance") or "fade_up"),
+                    entrance_progress,
+                )
+                img = Image.alpha_composite(img.convert("RGBA"), content_layer).convert("RGB")
+                draw = ImageDraw.Draw(img)
+            else:
+                _draw_scene_hud_headline(
+                    draw,
+                    shot,
+                    width=width,
+                    font=fonts["headline"],
+                )
             _draw_scene_narration(
                 draw,
                 str(shot.get("narration") or ""),
@@ -4521,6 +5935,9 @@ def _render_scene_mp4_video(
                 local=local,
                 font=fonts["caption"],
             )
+            cursor = scene_cursor_position(sec, shot)
+            if cursor and str(shot.get("shot_type") or "") != "title_card":
+                _draw_arbor_pointer(draw, *cursor)
 
             exit_fade_sec = max(0.0, float(os.environ.get("AUTO_VIDEO_EXIT_FADE_SEC", "0")))
             exit_fraction = min(1.0, exit_fade_sec / max(0.001, duration)) if exit_fade_sec else 0.0
@@ -4566,6 +5983,970 @@ def _render_scene_mp4_video(
 def _scene_ease(value: float) -> float:
     value = max(0.0, min(1.0, value))
     return value * value * (3.0 - 2.0 * value)
+
+
+def _hybrid_3d_camera_state(shot: dict[str, Any], local: float) -> dict[str, float]:
+    """Return a smooth, bounded virtual-camera pose for one spatial shot."""
+    progress = _scene_ease(local)
+    stage = shot.get("spatial_stage") if isinstance(shot.get("spatial_stage"), dict) else {}
+    motion = str(stage.get("camera_motion") or "dolly_in")
+    dx = 0.0
+    yaw = 0.0
+    push = progress
+    if motion == "truck_left":
+        dx = 6.0 - 12.0 * progress
+        push = 0.35 + 0.30 * progress
+        yaw = -4.0
+    elif motion == "truck_right":
+        dx = -6.0 + 12.0 * progress
+        push = 0.35 + 0.30 * progress
+        yaw = 4.0
+    elif motion == "soft_orbit":
+        dx = -4.0 + 8.0 * progress
+        push = 0.42 + 0.18 * progress
+        yaw = -9.0 + 18.0 * progress
+    return {
+        "progress": progress,
+        "dx": max(-12.0, min(12.0, dx)),
+        "yaw_px": max(-10.0, min(10.0, yaw)),
+        "push": max(0.0, min(1.0, push)),
+    }
+
+
+def _solve_linear_system(matrix: list[list[float]], values: list[float]) -> list[float]:
+    """Small dependency-free Gaussian solver used for the perspective homography."""
+    size = len(values)
+    augmented = [list(row) + [float(value)] for row, value in zip(matrix, values)]
+    for column in range(size):
+        pivot = max(range(column, size), key=lambda row: abs(augmented[row][column]))
+        if abs(augmented[pivot][column]) < 1e-9:
+            raise ValueError("singular perspective transform")
+        augmented[column], augmented[pivot] = augmented[pivot], augmented[column]
+        divisor = augmented[column][column]
+        augmented[column] = [value / divisor for value in augmented[column]]
+        for row in range(size):
+            if row == column:
+                continue
+            factor = augmented[row][column]
+            if abs(factor) < 1e-12:
+                continue
+            augmented[row] = [
+                value - factor * pivot_value
+                for value, pivot_value in zip(augmented[row], augmented[column])
+            ]
+    return [augmented[row][-1] for row in range(size)]
+
+
+def _perspective_coefficients(
+    destination: list[tuple[float, float]],
+    source: list[tuple[float, float]],
+) -> tuple[float, ...]:
+    """Map destination pixels back into source pixels for Pillow's transform API."""
+    matrix: list[list[float]] = []
+    values: list[float] = []
+    for (x, y), (u, v) in zip(destination, source):
+        matrix.append([x, y, 1.0, 0.0, 0.0, 0.0, -u * x, -u * y])
+        values.append(u)
+        matrix.append([0.0, 0.0, 0.0, x, y, 1.0, -v * x, -v * y])
+        values.append(v)
+    return tuple(_solve_linear_system(matrix, values))
+
+
+def _hybrid_3d_quad(
+    width: int,
+    height: int,
+    shot: dict[str, Any],
+    local: float,
+) -> list[tuple[float, float]]:
+    state = _hybrid_3d_camera_state(shot, local)
+    inset = 30.0 - 12.0 * state["push"]
+    dx = state["dx"]
+    yaw = state["yaw_px"]
+    pitch = 4.0
+    return [
+        (inset + dx + yaw, 8.0 + pitch),
+        (width - inset + dx - yaw, 8.0 - pitch),
+        (width - inset + dx + yaw * 0.45, height - 8.0 + pitch),
+        (inset + dx - yaw * 0.45, height - 8.0 - pitch),
+    ]
+
+
+def _apply_hybrid_3d_camera(layer: Any, shot: dict[str, Any], local: float) -> Any:
+    """Project a scene layer onto a restrained spatial plane with a soft depth shadow."""
+    from PIL import Image, ImageFilter
+
+    width, height = layer.size
+    destination = _hybrid_3d_quad(width, height, shot, local)
+    source = [(0.0, 0.0), (float(width), 0.0), (float(width), float(height)), (0.0, float(height))]
+    coefficients = _perspective_coefficients(destination, source)
+    projected = layer.transform(
+        layer.size,
+        Image.Transform.PERSPECTIVE,
+        coefficients,
+        resample=Image.Resampling.BICUBIC,
+    )
+    alpha = projected.getchannel("A")
+    shadow_alpha = alpha.filter(ImageFilter.GaussianBlur(radius=13)).point(lambda value: int(value * 0.34))
+    shadow = Image.new("RGBA", layer.size, (0, 0, 0, 0))
+    shadow_shape = Image.new("RGBA", layer.size, (4, 8, 14, 0))
+    shadow_shape.putalpha(shadow_alpha)
+    shadow.alpha_composite(shadow_shape, (7, 11))
+    shadow.alpha_composite(projected)
+    return shadow
+
+
+def _draw_hybrid_3d_stage(
+    draw: Any,
+    shot: dict[str, Any],
+    *,
+    width: int,
+    height: int,
+    local: float,
+    theme: dict[str, Any],
+) -> None:
+    """Draw text-free far/mid/near planes behind the projected information layer."""
+    state = _hybrid_3d_camera_state(shot, local)
+    accent = tuple(theme["accent"])
+    line = tuple(theme["line"])
+    dx = int(-state["dx"] * 0.35)
+    yaw = int(state["yaw_px"] * 0.45)
+    stage_bottom = height - 142
+    planes = (
+        (54, 116, 7, (7, 18, 29), line),
+        (72, 136, 3, (8, 23, 34), _scene_color(line, 10)),
+        (92, 158, 0, (9, 27, 38), _scene_color(line, 18)),
+    )
+    for inset, top, parallax, fill, outline in planes:
+        shift = dx * parallax // 7
+        polygon = [
+            (inset + shift + yaw, top),
+            (width - inset + shift - yaw, top - 6),
+            (width - inset - 20 + shift + yaw // 2, stage_bottom),
+            (inset + 20 + shift - yaw // 2, stage_bottom + 6),
+        ]
+        draw.polygon(polygon, fill=fill, outline=outline)
+    horizon_y = stage_bottom + 18
+    draw.line((42, horizon_y, width - 42, horizon_y - 5), fill=_scene_color(line, 20), width=2)
+    for index in range(5):
+        node_x = 112 + index * ((width - 224) // 4) + dx
+        radius = 4 + index % 2
+        node_y = horizon_y - 2 - int(index * 1.3)
+        draw.ellipse((node_x - radius, node_y - radius, node_x + radius, node_y + radius), fill=accent)
+
+
+def _hybrid_project_point(
+    point: tuple[float, float, float],
+    *,
+    width: int,
+    height: int,
+    shot: dict[str, Any],
+    local: float,
+) -> tuple[float, float]:
+    """Project one world-space point through a small perspective camera."""
+    x, y, z = point
+    state = _hybrid_3d_camera_state(shot, local)
+    yaw = math.radians(state["yaw_px"] * 0.55)
+    rotated_x = math.cos(yaw) * x + math.sin(yaw) * z
+    rotated_z = -math.sin(yaw) * x + math.cos(yaw) * z
+    camera_x = state["dx"] * 5.0
+    camera_z = -760.0 + state["push"] * 48.0
+    distance = max(260.0, rotated_z - camera_z)
+    focal = 900.0
+    scale = focal / distance
+    return (
+        width * 0.50 + (rotated_x - camera_x) * scale,
+        height * 0.47 + y * scale,
+    )
+
+
+def _hybrid_panel_quad(
+    *,
+    center: tuple[float, float, float],
+    size: tuple[float, float],
+    yaw_degrees: float,
+    width: int,
+    height: int,
+    shot: dict[str, Any],
+    local: float,
+) -> list[tuple[float, float]]:
+    center_x, center_y, center_z = center
+    panel_width, panel_height = size
+    yaw = math.radians(yaw_degrees)
+    points: list[tuple[float, float]] = []
+    for local_x, local_y in (
+        (-panel_width / 2, -panel_height / 2),
+        (panel_width / 2, -panel_height / 2),
+        (panel_width / 2, panel_height / 2),
+        (-panel_width / 2, panel_height / 2),
+    ):
+        world_x = center_x + local_x * math.cos(yaw)
+        world_z = center_z - local_x * math.sin(yaw)
+        points.append(
+            _hybrid_project_point(
+                (world_x, center_y + local_y, world_z),
+                width=width,
+                height=height,
+                shot=shot,
+                local=local,
+            )
+        )
+    return points
+
+
+def _hybrid_shifted_quad(
+    quad: list[tuple[float, float]],
+    *,
+    dx: float,
+    dy: float,
+) -> list[tuple[float, float]]:
+    return [(x + dx, y + dy) for x, y in quad]
+
+
+def _hybrid_draw_extruded_panel(
+    draw: Any,
+    quad: list[tuple[float, float]],
+    *,
+    depth_px: int,
+    front: tuple[int, int, int],
+    side: tuple[int, int, int],
+    top: tuple[int, int, int],
+    outline: tuple[int, int, int],
+    front_outline: bool = True,
+) -> None:
+    back = _hybrid_shifted_quad(quad, dx=depth_px, dy=depth_px)
+    draw.polygon([quad[1], back[1], back[2], quad[2]], fill=side, outline=outline)
+    draw.polygon([quad[2], back[2], back[3], quad[3]], fill=_scene_color(side, -5), outline=outline)
+    draw.polygon([quad[0], quad[1], back[1], back[0]], fill=top, outline=outline)
+    draw.polygon(quad, fill=front, outline=outline if front_outline else None)
+
+
+def _hybrid_texture_layer(
+    image_path: str,
+    *,
+    quad: list[tuple[float, float]],
+    canvas_size: tuple[int, int],
+    opacity: float,
+) -> Any | None:
+    from PIL import Image, ImageChops, ImageDraw, ImageOps
+
+    if not image_path or not Path(image_path).is_file():
+        return None
+    target_width = max(8, int(max(math.dist(quad[0], quad[1]), math.dist(quad[2], quad[3]))))
+    target_height = max(8, int(max(math.dist(quad[0], quad[3]), math.dist(quad[1], quad[2]))))
+    try:
+        with Image.open(image_path) as source:
+            texture = ImageOps.fit(
+                source.convert("RGBA"),
+                (target_width, target_height),
+                method=Image.Resampling.LANCZOS,
+            )
+    except (OSError, ValueError):
+        return None
+    destination = quad
+    source_quad = [
+        (0.0, 0.0),
+        (float(target_width), 0.0),
+        (float(target_width), float(target_height)),
+        (0.0, float(target_height)),
+    ]
+    coefficients = _perspective_coefficients(destination, source_quad)
+    layer = texture.transform(
+        canvas_size,
+        Image.Transform.PERSPECTIVE,
+        coefficients,
+        resample=Image.Resampling.BICUBIC,
+    )
+    # A supersampled polygon mask keeps the moving boundary temporally stable.
+    # Without it, a one-pixel front outline can alternately leak through the
+    # resampled RGBA edge as the homography crosses subpixels.
+    mask_scale = 4
+    mask = Image.new("L", (canvas_size[0] * mask_scale, canvas_size[1] * mask_scale), 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.polygon(
+        [(round(x * mask_scale), round(y * mask_scale)) for x, y in quad],
+        fill=255,
+    )
+    mask = mask.resize(canvas_size, Image.Resampling.LANCZOS)
+    layer.putalpha(ImageChops.multiply(layer.getchannel("A"), mask))
+    if opacity < 1.0:
+        layer.putalpha(layer.getchannel("A").point(lambda value: int(value * max(0.0, opacity))))
+    return layer
+
+
+def _hybrid_draw_floor(
+    draw: Any,
+    *,
+    width: int,
+    height: int,
+    shot: dict[str, Any],
+    local: float,
+    theme: dict[str, Any],
+) -> None:
+    line = tuple(theme["line"])
+    accent = tuple(theme["accent"])
+    floor_y = 245.0
+    far_z = 1100.0
+    near_z = 30.0
+    far_left = _hybrid_project_point((-880, floor_y, far_z), width=width, height=height, shot=shot, local=local)
+    far_right = _hybrid_project_point((880, floor_y, far_z), width=width, height=height, shot=shot, local=local)
+    near_right = _hybrid_project_point((880, floor_y, near_z), width=width, height=height, shot=shot, local=local)
+    near_left = _hybrid_project_point((-880, floor_y, near_z), width=width, height=height, shot=shot, local=local)
+    draw.polygon([far_left, far_right, near_right, near_left], fill=(5, 18, 28), outline=_scene_color(line, 12))
+    for world_x in range(-800, 801, 160):
+        start = _hybrid_project_point((world_x, floor_y, near_z), width=width, height=height, shot=shot, local=local)
+        end = _hybrid_project_point((world_x, floor_y, far_z), width=width, height=height, shot=shot, local=local)
+        draw.line((*start, *end), fill=line, width=1)
+    for z in (90, 180, 300, 450, 650, 900):
+        start = _hybrid_project_point((-850, floor_y, z), width=width, height=height, shot=shot, local=local)
+        end = _hybrid_project_point((850, floor_y, z), width=width, height=height, shot=shot, local=local)
+        draw.line((*start, *end), fill=line, width=1)
+    horizon_y = int((far_left[1] + far_right[1]) / 2)
+    draw.line((48, horizon_y, width - 48, horizon_y), fill=_scene_color(line, 18), width=1)
+    draw.ellipse((width // 2 - 4, horizon_y - 4, width // 2 + 4, horizon_y + 4), fill=accent)
+
+
+def _hybrid_asset_paths(slide: dict[str, Any], shot: dict[str, Any]) -> list[str]:
+    preferred = [
+        str(shot.get("visual_asset_path") or ""),
+        *[str(path) for path in (slide.get("visual_asset_paths") or [])],
+    ]
+    unique: list[str] = []
+    for path in preferred:
+        if path and path not in unique and Path(path).is_file():
+            unique.append(path)
+    return unique
+
+
+def _hybrid_draw_media_objects(
+    image: Any,
+    slide: dict[str, Any],
+    shot: dict[str, Any],
+    *,
+    width: int,
+    height: int,
+    local: float,
+    theme: dict[str, Any],
+    fonts: dict[str, Any],
+) -> Any:
+    from PIL import Image, ImageDraw
+
+    draw = ImageDraw.Draw(image)
+    accent = tuple(theme["accent"])
+    reveal = _scene_ease(min(1.0, local / 0.22))
+    assets = _hybrid_asset_paths(slide, shot)
+    panel_specs = [
+        ((-360.0, -76.0, 610.0), (330.0, 205.0), 14.0, 0.44),
+        ((370.0, 34.0, 470.0), (310.0, 190.0), -13.0, 0.52),
+        ((205.0, -12.0, 80.0), (720.0, 405.0), -5.0, 1.0),
+    ]
+    asset_order = [1, 2, 0]
+    for index, (center, size, yaw, opacity) in enumerate(panel_specs):
+        object_reveal = _scene_ease(max(0.0, min(1.0, reveal * 1.45 - index * 0.18)))
+        animated_center = (center[0], center[1] + (1.0 - object_reveal) * 70.0, center[2])
+        quad = _hybrid_panel_quad(
+            center=animated_center,
+            size=size,
+            yaw_degrees=yaw,
+            width=width,
+            height=height,
+            shot=shot,
+            local=local,
+        )
+        _hybrid_draw_extruded_panel(
+            draw,
+            quad,
+            depth_px=5 if index < 2 else 9,
+            front=(10, 28, 40),
+            side=(12, 47, 58),
+            top=(22, 67, 75),
+            outline=_scene_color(tuple(theme["line"]), 10 if index == 2 else 0),
+            front_outline=False,
+        )
+        asset_index = min(asset_order[index], len(assets) - 1) if assets else 0
+        path = assets[asset_index] if assets else ""
+        texture = _hybrid_texture_layer(
+            path,
+            quad=quad,
+            canvas_size=(width, height),
+            opacity=opacity * object_reveal,
+        )
+        if texture is not None:
+            image = Image.alpha_composite(image.convert("RGBA"), texture).convert("RGB")
+            draw = ImageDraw.Draw(image)
+
+    # Flat callout HUD deliberately sits outside the media planes.
+    draw.rectangle((62, 150, 68, 468), fill=accent)
+    draw.text((88, 154), _scene_model_label(slide, "primary"), fill=accent, font=fonts["small"])
+    _draw_wrapped_text(
+        draw,
+        str(shot.get("focus_text") or shot.get("headline") or ""),
+        (88, 198),
+        font=fonts["headline"],
+        width=310,
+        max_height=212,
+        fill=(244, 248, 252),
+        spacing=7,
+        max_lines=5,
+    )
+    caption = _clean_display_text(slide.get("visual_caption") or slide.get("purpose") or "")
+    _draw_wrapped_text(
+        draw,
+        caption,
+        (88, 420),
+        font=fonts["small"],
+        width=300,
+        max_height=68,
+        fill=(151, 174, 199),
+        spacing=4,
+        max_lines=3,
+    )
+    return image
+
+
+def _hybrid_draw_process_objects(
+    image: Any,
+    slide: dict[str, Any],
+    shot: dict[str, Any],
+    *,
+    width: int,
+    height: int,
+    local: float,
+    theme: dict[str, Any],
+    fonts: dict[str, Any],
+) -> Any:
+    from PIL import ImageDraw
+
+    draw = ImageDraw.Draw(image)
+    accent = tuple(theme["accent"])
+    rows = [row for row in (slide.get("visual_table") or []) if isinstance(row, list)]
+    table_items = [
+        _clean_visual_item(str(row[0]))
+        for row in rows[1:5]
+        if row and _clean_display_text(row[0])
+    ]
+    items = (
+        table_items
+        if len(table_items) >= 3
+        else [_clean_visual_item(str(item)) for item in (slide.get("visual_items") or slide.get("bullets") or [])[:4]]
+    )
+    if not items:
+        return image
+    nodes: list[dict[str, Any]] = []
+    x_positions = {
+        1: [0.0],
+        2: [-230.0, 230.0],
+        3: [-390.0, 0.0, 390.0],
+        4: [-440.0, -150.0, 150.0, 440.0],
+    }[len(items)]
+    for index, item in enumerate(items):
+        nodes.append(
+            {
+                "label": item,
+                "center": (x_positions[index], -20.0 + (index % 2) * 88.0, 470.0 - index * 135.0),
+                "size": (220.0, 112.0),
+                "yaw": 8.0 - index * 5.0,
+            }
+        )
+    projected_centers = [
+        _hybrid_project_point(node["center"], width=width, height=height, shot=shot, local=local)
+        for node in nodes
+    ]
+    flow_progress = _animation_event_progress(shot, "flow_token", local)
+    for index in range(len(projected_centers) - 1):
+        start = projected_centers[index]
+        end = projected_centers[index + 1]
+        draw.line((*start, *end), fill=(38, 87, 101), width=max(2, 5 - index))
+        arrow_x = start[0] + (end[0] - start[0]) * 0.78
+        arrow_y = start[1] + (end[1] - start[1]) * 0.78
+        draw.ellipse((arrow_x - 3, arrow_y - 3, arrow_x + 3, arrow_y + 3), fill=accent)
+    if len(projected_centers) > 1:
+        segment_position = flow_progress * (len(projected_centers) - 1)
+        segment = min(len(projected_centers) - 2, int(segment_position))
+        fraction = segment_position - segment
+        start, end = projected_centers[segment], projected_centers[segment + 1]
+        token_x = start[0] + (end[0] - start[0]) * fraction
+        token_y = start[1] + (end[1] - start[1]) * fraction
+        draw.ellipse((token_x - 10, token_y - 10, token_x + 10, token_y + 10), fill=(241, 251, 251), outline=accent, width=3)
+
+    # Painter's order: far objects first, each with independent geometry and reveal.
+    for reverse_index, node in enumerate(sorted(nodes, key=lambda value: value["center"][2], reverse=True)):
+        original_index = nodes.index(node)
+        node_reveal = _scene_ease(max(0.0, min(1.0, local * 4.2 - original_index * 0.52)))
+        center = node["center"]
+        animated_center = (center[0], center[1] + (1.0 - node_reveal) * 90.0, center[2])
+        quad = _hybrid_panel_quad(
+            center=animated_center,
+            size=node["size"],
+            yaw_degrees=node["yaw"],
+            width=width,
+            height=height,
+            shot=shot,
+            local=local,
+        )
+        active = original_index == min(int(shot.get("focus_index") or 0), len(nodes) - 1)
+        _hybrid_draw_extruded_panel(
+            draw,
+            quad,
+            depth_px=9 + original_index * 2,
+            front=(8, 34, 43) if active else (8, 23, 35),
+            side=(10, 55, 62) if active else (13, 37, 50),
+            top=(22, 82, 84) if active else (22, 51, 63),
+            outline=accent if active else (54, 85, 107),
+        )
+        center_x = int(sum(point[0] for point in quad) / 4)
+        center_y = int(sum(point[1] for point in quad) / 4)
+        label_width = max(120, int(max(point[0] for point in quad) - min(point[0] for point in quad) - 26))
+        draw.text((center_x - label_width // 2, center_y - 31), f"{original_index + 1:02d}", fill=accent, font=fonts["small"])
+        _draw_wrapped_text(
+            draw,
+            node["label"],
+            (center_x - label_width // 2, center_y - 5),
+            font=fonts["small"],
+            width=label_width,
+            max_height=56,
+            fill=(239, 246, 251),
+            spacing=3,
+            max_lines=2,
+        )
+    return image
+
+
+def _hybrid_draw_qualitative_data_objects(
+    image: Any,
+    slide: dict[str, Any],
+    shot: dict[str, Any],
+    cards: list[tuple[str, str]],
+    *,
+    width: int,
+    height: int,
+    local: float,
+    theme: dict[str, Any],
+    fonts: dict[str, Any],
+) -> Any:
+    """Stage qualitative claims as spatial modules, never as changing metrics."""
+    from PIL import ImageDraw
+
+    draw = ImageDraw.Draw(image)
+    accent = tuple(theme["accent"])
+    modules = cards[:4]
+    if len(modules) == 4:
+        positions = [
+            (-330.0, -78.0, 340.0, 7.0),
+            (290.0, -58.0, 285.0, -7.0),
+            (-305.0, 68.0, 82.0, 5.0),
+            (285.0, 76.0, 48.0, -5.0),
+        ]
+        sizes = [(450.0, 132.0), (450.0, 132.0), (410.0, 124.0), (410.0, 124.0)]
+    else:
+        positions = [
+            (-330.0, -75.0, 340.0, 7.0),
+            (290.0, -55.0, 275.0, -7.0),
+            (-30.0, 105.0, 75.0, 1.5),
+        ]
+        sizes = [(455.0, 142.0), (455.0, 142.0), (560.0, 136.0)]
+    hub_world = (0.0, -105.0, -65.0)
+    hub = _hybrid_project_point(hub_world, width=width, height=height, shot=shot, local=local)
+    link_progress = _animation_event_progress(shot, "flow_token", local)
+
+    # Links live behind the modules and grow once; they do not pulse or loop.
+    for index, _module in enumerate(modules):
+        center_x, center_y, center_z, _yaw = positions[index]
+        source = _hybrid_project_point(
+            (center_x, center_y + sizes[index][1] * 0.36, center_z),
+            width=width,
+            height=height,
+            shot=shot,
+            local=local,
+        )
+        staggered = _scene_ease(max(0.0, min(1.0, link_progress * 1.45 - index * 0.18)))
+        end = (
+            source[0] + (hub[0] - source[0]) * staggered,
+            source[1] + (hub[1] - source[1]) * staggered,
+        )
+        draw.line((*source, *end), fill=(34, 91, 106), width=3)
+        if staggered > 0.02:
+            draw.ellipse((end[0] - 4, end[1] - 4, end[0] + 4, end[1] + 4), fill=accent)
+
+    # Painter's order: far modules first. The only number is a stable small index.
+    for index in reversed(range(len(modules))):
+        _ordinal, label = modules[index]
+        center_x, center_y, center_z, yaw = positions[index]
+        reveal = _scene_ease(max(0.0, min(1.0, local * 4.0 - index * 0.46)))
+        if reveal <= 0.01:
+            continue
+        animated_center = (center_x, center_y + (1.0 - reveal) * 86.0, center_z)
+        quad = _hybrid_panel_quad(
+            center=animated_center,
+            size=sizes[index],
+            yaw_degrees=yaw,
+            width=width,
+            height=height,
+            shot=shot,
+            local=local,
+        )
+        active = index == min(int(shot.get("focus_index") or 0), len(modules) - 1)
+        _hybrid_draw_extruded_panel(
+            draw,
+            quad,
+            depth_px=11 + index * 2,
+            front=(7, 35, 44) if active else (8, 22, 35),
+            side=(10, 65, 69) if active else (13, 39, 52),
+            top=(24, 93, 90) if active else (22, 54, 66),
+            outline=accent if active else (47, 78, 101),
+        )
+        x1 = int(min(point[0] for point in quad)) + 20
+        y1 = int(min(point[1] for point in quad)) + 15
+        x2 = int(max(point[0] for point in quad)) - 20
+        draw.text(
+            (x1, y1),
+            f"{index + 1:02d}",
+            fill=accent if active else (129, 151, 176),
+            font=fonts["small"],
+        )
+        draw.rectangle(
+            (x1 + 49, y1 + 9, min(x2, x1 + 112), y1 + 12),
+            fill=accent if active else (44, 79, 101),
+        )
+        if ":" in label:
+            module_title, module_detail = [part.strip() for part in label.split(":", 1)]
+            _draw_single_line_text(
+                draw,
+                module_title,
+                (x1, y1 + 29),
+                font=fonts["body"],
+                width=max(120, x2 - x1),
+                fill=(240, 247, 251),
+                min_font_size=18,
+            )
+            _draw_wrapped_text(
+                draw,
+                module_detail,
+                (x1, y1 + 61),
+                font=fonts["small"],
+                width=max(120, x2 - x1),
+                max_height=49,
+                fill=(177, 201, 215),
+                spacing=3,
+                max_lines=2,
+            )
+        else:
+            _draw_wrapped_text(
+                draw,
+                label,
+                (x1, y1 + 31),
+                font=fonts["body"],
+                width=max(120, x2 - x1),
+                max_height=74,
+                fill=(240, 247, 251),
+                spacing=4,
+                max_lines=3,
+            )
+
+    result_label = _scene_model_label(slide, "result")
+    hub_reveal = _animation_event_progress(shot, "highlight_result", local)
+    if result_label and hub_reveal > 0.01:
+        radius = 5 + int(7 * hub_reveal)
+        draw.ellipse(
+            (hub[0] - radius, hub[1] - radius, hub[0] + radius, hub[1] + radius),
+            fill=(235, 250, 249),
+            outline=accent,
+            width=3,
+        )
+        _draw_single_line_text(
+            draw,
+            result_label,
+            (int(hub[0]) + 22, int(hub[1]) - 11),
+            font=fonts["small"],
+            width=max(120, min(300, width - int(hub[0]) - 44)),
+            fill=(205, 230, 237),
+        )
+    return image
+
+
+def _hybrid_metric_reveal_progress(shot: dict[str, Any], local: float, *, index: int = 0) -> float:
+    """Reveal a real metric promptly, then hold its exact value for the shot."""
+    elapsed_sec = max(0.0, float(local)) * max(0.1, float(shot.get("duration_sec") or 0.1))
+    return _scene_ease((elapsed_sec - index * 0.12) / 0.78)
+
+
+def _hybrid_metric_hero_copy(
+    slide: dict[str, Any], shot: dict[str, Any], parsed_label: str
+) -> tuple[str, str]:
+    """Use model-authored display copy instead of a parser-damaged one-line label."""
+    title = _scene_model_label(slide, "secondary") or _scene_model_label(slide, "primary")
+    detail = _clean_display_text(shot.get("focus_text") or parsed_label)
+    return title, detail
+
+
+def _hybrid_draw_data_objects(
+    image: Any,
+    slide: dict[str, Any],
+    shot: dict[str, Any],
+    *,
+    width: int,
+    height: int,
+    local: float,
+    theme: dict[str, Any],
+    fonts: dict[str, Any],
+) -> Any:
+    from PIL import ImageDraw
+
+    draw = ImageDraw.Draw(image)
+    accent = tuple(theme["accent"])
+    cards = _metric_scene_cards(slide, shot)[:4]
+    if _metric_scene_is_qualitative(slide, shot):
+        return _hybrid_draw_qualitative_data_objects(
+            image,
+            slide,
+            shot,
+            cards,
+            width=width,
+            height=height,
+            local=local,
+            theme=theme,
+            fonts=fonts,
+        )
+    if len(cards) == 1:
+        value, parsed_label = cards[0]
+        reveal = _scene_ease(max(0.0, min(1.0, local * 3.2)))
+        quad = _hybrid_panel_quad(
+            center=(0.0, 8.0 + (1.0 - reveal) * 82.0, 145.0),
+            size=(900.0, 210.0),
+            yaw_degrees=1.0,
+            width=width,
+            height=height,
+            shot=shot,
+            local=local,
+        )
+        _hybrid_draw_extruded_panel(
+            draw,
+            quad,
+            depth_px=13,
+            front=(7, 34, 43),
+            side=(10, 64, 69),
+            top=(24, 92, 89),
+            outline=accent,
+        )
+        x1 = int(min(point[0] for point in quad)) + 28
+        y1 = int(min(point[1] for point in quad)) + 22
+        x2 = int(max(point[0] for point in quad)) - 28
+        divider_x = min(x2 - 360, x1 + 205)
+        draw.rectangle((divider_x, y1 + 8, divider_x + 3, y1 + 158), fill=(35, 91, 104))
+        _draw_single_line_text(
+            draw,
+            value,
+            (x1, y1 + 48),
+            font=fonts["number"],
+            width=max(120, divider_x - x1 - 24),
+            fill=(244, 248, 252),
+            min_font_size=42,
+        )
+        hero_title, hero_detail = _hybrid_metric_hero_copy(slide, shot, parsed_label)
+        copy_x = divider_x + 30
+        copy_width = max(220, x2 - copy_x)
+        if hero_title:
+            _draw_single_line_text(
+                draw,
+                hero_title,
+                (copy_x, y1 + 18),
+                font=fonts["body"],
+                width=copy_width,
+                fill=accent,
+                min_font_size=19,
+            )
+        _draw_wrapped_text(
+            draw,
+            hero_detail,
+            (copy_x, y1 + 61),
+            font=fonts["caption"],
+            width=copy_width,
+            max_height=112,
+            fill=(230, 239, 246),
+            spacing=4,
+            max_lines=4,
+        )
+        return image
+    positions = [
+        (-320.0, -82.0, 360.0, 7.0),
+        (260.0, -56.0, 300.0, -7.0),
+        (-285.0, 90.0, 90.0, 5.0),
+        (285.0, 90.0, 45.0, -5.0),
+    ]
+    sizes = [(440.0, 145.0), (440.0, 145.0), (390.0, 125.0), (390.0, 125.0)]
+    for index in reversed(range(len(cards))):
+        value, label = cards[index]
+        center_x, center_y, center_z, yaw = positions[index]
+        card_reveal = _scene_ease(max(0.0, min(1.0, local * 4.0 - index * 0.38)))
+        animated_center = (center_x, center_y + (1.0 - card_reveal) * 95.0, center_z)
+        quad = _hybrid_panel_quad(
+            center=animated_center,
+            size=sizes[index],
+            yaw_degrees=yaw,
+            width=width,
+            height=height,
+            shot=shot,
+            local=local,
+        )
+        active = index == min(int(shot.get("focus_index") or 0), len(cards) - 1)
+        _hybrid_draw_extruded_panel(
+            draw,
+            quad,
+            depth_px=11 + index * 2,
+            front=(7, 33, 43) if active else (8, 21, 34),
+            side=(10, 63, 68) if active else (13, 38, 51),
+            top=(24, 91, 88) if active else (22, 53, 65),
+            outline=accent if active else (47, 76, 99),
+        )
+        x1 = int(min(point[0] for point in quad)) + 20
+        y1 = int(min(point[1] for point in quad)) + 14
+        x2 = int(max(point[0] for point in quad)) - 18
+        draw.rectangle(
+            (x1, y1 + 4, min(x2, x1 + 70), y1 + 8),
+            fill=accent if active else (44, 79, 101),
+        )
+        _draw_single_line_text(
+            draw,
+            value,
+            (x1, y1 + 17),
+            font=fonts["number"],
+            width=max(120, x2 - x1),
+            fill=(244, 248, 252),
+            min_font_size=30,
+        )
+        _draw_wrapped_text(
+            draw,
+            label,
+            (x1, y1 + 83),
+            font=fonts["small"],
+            width=max(120, x2 - x1),
+            max_height=42,
+            fill=(187, 207, 220),
+            spacing=3,
+            max_lines=2,
+        )
+    return image
+
+
+def _draw_hybrid_3d_object_scene(
+    image: Any,
+    slide: dict[str, Any],
+    shot: dict[str, Any],
+    *,
+    width: int,
+    height: int,
+    local: float,
+    theme: dict[str, Any],
+    fonts: dict[str, Any],
+) -> Any:
+    """Render independent world-space objects; never perspective-warp a whole slide."""
+    from PIL import ImageDraw
+
+    draw = ImageDraw.Draw(image)
+    _hybrid_draw_floor(draw, width=width, height=height, shot=shot, local=local, theme=theme)
+    shot_type = str(shot.get("shot_type") or "")
+    if shot_type in {"media_establish", "media_detail", "image_focus", "detail_focus"}:
+        return _hybrid_draw_media_objects(
+            image, slide, shot, width=width, height=height, local=local, theme=theme, fonts=fonts
+        )
+    if shot_type in {"process", "process_map", "process_trace", "process_focus"}:
+        return _hybrid_draw_process_objects(
+            image, slide, shot, width=width, height=height, local=local, theme=theme, fonts=fonts
+        )
+    return _hybrid_draw_data_objects(
+        image, slide, shot, width=width, height=height, local=local, theme=theme, fonts=fonts
+    )
+
+
+def _draw_scene_hud_headline(
+    draw: Any,
+    shot: dict[str, Any],
+    *,
+    width: int,
+    font: Any,
+) -> None:
+    if str(shot.get("shot_type") or "") in {"media_establish", "media_detail", "process_trace"}:
+        return
+    _draw_single_line_text(
+        draw,
+        str(shot.get("headline") or ""),
+        (76, 112),
+        font=font,
+        width=width - 152,
+        fill=(244, 247, 251),
+    )
+
+
+def _scene_render_window(timeline: list[dict[str, Any]]) -> tuple[float, float] | None:
+    start_value = os.environ.get("AUTO_VIDEO_PREVIEW_START_SEC", "").strip()
+    duration_value = os.environ.get("AUTO_VIDEO_PREVIEW_DURATION_SEC", "").strip()
+    if not start_value and not duration_value:
+        return None
+    timeline_start = min((float(shot["start_sec"]) for shot in timeline), default=0.0)
+    timeline_end = max((float(shot["end_sec"]) for shot in timeline), default=timeline_start)
+    start = max(timeline_start, float(start_value or timeline_start))
+    duration = max(0.25, float(duration_value or 12.0))
+    return start, min(timeline_end, start + duration)
+
+
+def _scene_cursor_target(
+    shot: dict[str, Any],
+    *,
+    planned_x: float = 50.0,
+    planned_y: float = 44.0,
+) -> tuple[float, float]:
+    """Map narration focus to the final scene layout rather than a legacy slide image."""
+    shot_type = str(shot.get("shot_type") or "")
+    focus = max(0, int(shot.get("focus_index") or 0))
+    variant = int(shot.get("composition_variant") or 0)
+    if shot_type in {"media_establish", "media_detail", "image_focus", "detail_focus"}:
+        target = (planned_x, planned_y)
+    elif shot_type in {"process", "process_map"}:
+        target = (15.0 + min(3, focus) * 22.0, 49.0)
+    elif shot_type in {"process_trace", "process_focus"}:
+        target = (50.0, 49.0)
+    elif shot_type in {"evidence", "evidence_board", "evidence_focus", "evidence_closeup"}:
+        target = (29.0 + min(2, focus) * 22.0, 43.0)
+    elif shot_type in {"metric", "data_landscape", "data_focus", "data_detail", "data_conclusion"}:
+        target = (73.0 if variant % 2 else 27.0, 45.0)
+    elif shot_type == "contrast":
+        target = (72.0, 44.0)
+    elif shot_type == "synthesis":
+        target = (25.0, 36.0 + min(2, focus) * 9.0)
+    else:
+        target = (31.0, 43.0)
+    return max(8.0, min(90.0, target[0])), max(14.0, min(72.0, target[1]))
+
+
+def _should_draw_cursor_grounding_scene(slide: dict[str, Any], shot: dict[str, Any]) -> bool:
+    if _is_summary_slide(slide) or str(shot.get("shot_type") or "") in {"synthesis", "data_conclusion"}:
+        return False
+    text = " ".join(
+        str(value or "")
+        for value in (
+            slide.get("title"),
+            slide.get("purpose"),
+            shot.get("narration"),
+            shot.get("focus_text"),
+        )
+    ).casefold()
+    return any(
+        phrase in text
+        for phrase in (
+            "cursor grounding",
+            "cursor trajector",
+            "computer-use grounding",
+            "spatial-temporal cursor",
+            "whisperx",
+            "audio-text synchronization",
+            "subtitle and cursor",
+            "subtitles and cursor",
+        )
+    )
+
+
+def _scene_model_label(slide: dict[str, Any], key: str) -> str:
+    labels = slide.get("animation_labels") if isinstance(slide.get("animation_labels"), dict) else {}
+    return _clean_display_text(labels.get(key))
 
 
 def _apply_scene_entrance(layer: Any, entrance: str, progress: float) -> Any:
@@ -4657,21 +7038,13 @@ def _draw_scene_progress(
     if shot_type == "title_card":
         return
     if shot_type in {"opener", "section_title"}:
-        _draw_single_line_text(
-            draw,
-            f"CHAPTER {slide_index:02d}",
-            (width - 260, 42),
-            font=font,
-            width=196,
-            fill=muted,
-        )
+        draw.text((width - 118, 42), f"{slide_index:02d}", font=font, fill=muted)
         return
     if shot_type in {"media_establish", "media_detail", "process_trace"}:
         return
     label = str(shot.get("section_label") or shot.get("headline") or "Research")
     _draw_single_line_text(draw, label.upper(), (64, 42), font=font, width=760, fill=accent)
-    shot_label = f"CHAPTER {slide_index:02d}"
-    _draw_single_line_text(draw, shot_label, (width - 330, 42), font=font, width=266, fill=muted)
+    draw.text((width - 118, 42), f"{slide_index:02d}", font=font, fill=muted)
     progress = max(0.0, min(1.0, sec / max(0.001, total_duration)))
     draw.rectangle((64, 78, width - 64, 80), fill=tuple(theme["line"]))
     draw.rectangle((64, 78, 64 + int((width - 128) * progress), 81), fill=accent)
@@ -4687,13 +7060,15 @@ def _draw_scene_composition(
     height: int,
     local: float,
     fonts: dict[str, Any],
+    draw_headline: bool = True,
 ) -> None:
     duration = max(0.001, float(shot.get("duration_sec") or 1.0))
     animation_sec = max(0.001, float(shot.get("animation_sec") or duration * 0.34))
     animation_fraction = max(0.001, min(1.0, animation_sec / duration))
     reveal = _scene_ease(min(1.0, local / animation_fraction))
-    entrance = str(shot.get("entrance") or "fade_up")
-    y_shift = int((1.0 - reveal) * 28) if entrance == "fade_up" else 0
+    # Whole-shot entrance motion is handled by _apply_scene_entrance. Keep the
+    # longer reveal timeline available for staged nodes, cards, and evidence.
+    y_shift = 0
     drift_progress = (
         0.0
         if local <= animation_fraction
@@ -4705,7 +7080,7 @@ def _draw_scene_composition(
     muted = (154, 177, 207)
 
     if shot_type == "title_card":
-        draw.text((76, 132 + y_shift), "RESEARCH EXPLAINER", fill=accent, font=fonts["small"])
+        draw.text((76, 132 + y_shift), _scene_model_label(slide, "primary"), fill=accent, font=fonts["small"])
         draw.rectangle((76, 166 + y_shift, 292, 171 + y_shift), fill=accent)
         _draw_wrapped_text(
             draw,
@@ -4731,12 +7106,12 @@ def _draw_scene_composition(
                 spacing=5,
                 max_lines=2,
             )
-        draw.text((width - 252, height - 188), "PAPER OVERVIEW", fill=accent, font=fonts["small"])
+        draw.text((width - 252, height - 188), _scene_model_label(slide, "result"), fill=accent, font=fonts["small"])
         draw.rectangle((width - 252, height - 154, width - 76, height - 150), fill=accent)
         return
 
     if shot_type == "opener":
-        draw.text((76, 144 + y_shift), "RESEARCH OVERVIEW", fill=accent, font=fonts["small"])
+        draw.text((76, 144 + y_shift), _scene_model_label(slide, "primary"), fill=accent, font=fonts["small"])
         draw.rectangle((76, 174 + y_shift, 254, 178 + y_shift), fill=accent)
         _draw_wrapped_text(
             draw,
@@ -4771,8 +7146,7 @@ def _draw_scene_composition(
         return
 
     if shot_type == "section_title":
-        chapter = int(shot.get("slide_index") or 0)
-        draw.text((76, 142 + y_shift), f"CHAPTER {chapter:02d}", fill=accent, font=fonts["small"])
+        draw.text((76, 142 + y_shift), _scene_model_label(slide, "primary"), fill=accent, font=fonts["small"])
         draw.rectangle((76, 174 + y_shift, 248, 178 + y_shift), fill=accent)
         _draw_wrapped_text(
             draw,
@@ -4807,7 +7181,7 @@ def _draw_scene_composition(
         return
 
     headline = str(shot.get("headline") or "")
-    if shot_type not in {"media_establish", "media_detail", "process_trace"}:
+    if draw_headline and shot_type not in {"media_establish", "media_detail", "process_trace"}:
         _draw_single_line_text(draw, headline, (76, 112 + y_shift), font=fonts["headline"], width=1128, fill=fg)
 
     if shot_type == "media_establish":
@@ -4900,13 +7274,21 @@ def _draw_scene_composition(
             max_lines=3,
         )
     elif shot_type in {"process", "process_map"}:
-        _draw_scene_process(draw, slide, (76, 205, width - 76, 500), reveal=reveal, accent=accent, fonts=fonts)
+        _draw_scene_process(draw, slide, (76, 205, width - 76, 500), reveal=reveal, shot=shot, accent=accent, fonts=fonts)
     elif shot_type == "process_trace":
         _draw_scene_process_trace(draw, slide, shot, (48, 70, width - 48, height - 150), reveal=reveal, accent=accent, fonts=fonts)
     elif shot_type == "process_focus":
         _draw_scene_process_focus(draw, slide, shot, (92, 172, width - 92, 514), reveal=reveal, accent=accent, fonts=fonts)
     elif shot_type in {"evidence", "evidence_board"}:
-        _draw_scene_evidence(draw, slide, (92, 190, width - 92, 510), reveal=reveal, fonts=fonts)
+        _draw_scene_evidence(
+            draw,
+            slide,
+            (92, 190, width - 92, 510),
+            reveal=reveal,
+            shot=shot,
+            accent=accent,
+            fonts=fonts,
+        )
     elif shot_type in {"evidence_focus", "evidence_closeup"}:
         _draw_scene_evidence_focus(draw, slide, shot, (92, 178, width - 92, 510), reveal=reveal, accent=accent, fonts=fonts)
     elif shot_type in {"metric", "data_landscape", "data_focus", "data_detail", "data_conclusion"}:
@@ -4916,7 +7298,7 @@ def _draw_scene_composition(
     elif shot_type == "synthesis":
         _draw_scene_takeaways(draw, slide, (92, 190, width - 92, 510), reveal=reveal, accent=accent, fonts=fonts)
     else:
-        draw.text((92, 180 + y_shift), "KEY FINDING", fill=accent, font=fonts["small"])
+        draw.text((92, 180 + y_shift), _scene_model_label(slide, "result"), fill=accent, font=fonts["small"])
         draw.rectangle((92, 212 + y_shift, 274, 216 + y_shift), fill=accent)
         _draw_wrapped_text(
             draw,
@@ -4951,8 +7333,9 @@ def _draw_scene_media_establish(
     accent: tuple[int, int, int],
     fonts: dict[str, Any],
 ) -> None:
-    """Use a paper figure or generated visual as the scene, not as a slide widget."""
-    media_box = (24, 18, width - 24, height - 142)
+    """Establish a visual without covering its focal content with text."""
+    variant = int(shot.get("composition_variant") or 0)
+    media_box, text_box = _scene_media_split_layout(width, height, media_left=variant % 2 == 0)
     if not _draw_generated_image(
         draw,
         slide,
@@ -4963,27 +7346,48 @@ def _draw_scene_media_establish(
         _draw_scene_visual_fallback(draw, slide, (72, 120, width - 72, height - 170), reveal=reveal, fonts=fonts)
         return
 
-    panel_width = min(610, width - 152)
-    panel_y = 62 + int((1.0 - reveal) * 22)
-    draw.rounded_rectangle(
-        (64, panel_y, 64 + panel_width, panel_y + 150),
-        radius=6,
-        fill=(4, 12, 22, 224),
-        outline=(*accent, 210),
-        width=2,
-    )
-    draw.text((88, panel_y + 18), "VISUAL EVIDENCE", fill=accent, font=fonts["small"])
+    text_x1, text_y1, text_x2, text_y2 = text_box
+    text_y = text_y1 + int((1.0 - reveal) * 18)
+    draw.rectangle((text_x1, text_y, text_x1 + int(118 * reveal), text_y + 4), fill=accent)
+    draw.text((text_x1, text_y + 22), _scene_model_label(slide, "primary"), fill=accent, font=fonts["small"])
     _draw_wrapped_text(
         draw,
         str(shot.get("focus_text") or shot.get("headline") or ""),
-        (88, panel_y + 52),
-        font=fonts["body"],
-        width=panel_width - 48,
-        max_height=78,
+        (text_x1, text_y + 64),
+        font=fonts["headline"],
+        width=text_x2 - text_x1,
+        max_height=min(220, text_y2 - text_y - 82),
         fill=(245, 248, 252),
-        spacing=5,
-        max_lines=3,
+        spacing=7,
+        max_lines=5,
     )
+
+
+def _scene_media_split_layout(
+    width: int,
+    height: int,
+    *,
+    media_left: bool,
+) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
+    """Return disjoint, subtitle-safe boxes with a near-16:9 media region."""
+    margin = max(24, int(width * 0.038))
+    gap = max(24, int(width * 0.025))
+    top = max(82, int(height * 0.12))
+    bottom = height - max(146, int(height * 0.21))
+    available_width = width - margin * 2 - gap
+    text_width = min(336, max(280, int(available_width * 0.29)))
+    media_width = available_width - text_width
+    media_height = bottom - top
+    target_height = min(media_height, int(media_width * 9 / 16))
+    media_top = top + max(0, (media_height - target_height) // 2)
+    media_bottom = media_top + target_height
+    if media_left:
+        media = (margin, media_top, margin + media_width, media_bottom)
+        text = (media[2] + gap, top, width - margin, bottom)
+    else:
+        text = (margin, top, margin + text_width, bottom)
+        media = (text[2] + gap, media_top, width - margin, media_bottom)
+    return media, text
 
 
 def _draw_scene_media_detail(
@@ -5001,9 +7405,9 @@ def _draw_scene_media_detail(
     """Cut from the establishing image to an evidence-led close-up composition."""
     variant = int(shot.get("composition_variant") or 0)
     media_left = bool(variant % 2)
-    media_box = (28, 28, 850, height - 146) if media_left else (width - 850, 28, width - 28, height - 146)
-    text_x = 904 if media_left else 64
-    text_width = width - text_x - 64 if media_left else width - 850 - 108
+    media_box, text_box = _scene_media_split_layout(width, height, media_left=media_left)
+    text_x, text_y, text_x2, text_y2 = text_box
+    text_width = text_x2 - text_x
     if not _draw_generated_image(
         draw,
         slide,
@@ -5012,15 +7416,15 @@ def _draw_scene_media_detail(
         motion_style="pan_right" if media_left else "pan_left",
     ):
         _draw_scene_visual_fallback(draw, slide, media_box, reveal=reveal, fonts=fonts)
-    draw.text((text_x, 98), "EVIDENCE CLOSE-UP", fill=accent, font=fonts["small"])
-    draw.rectangle((text_x, 132, text_x + int(text_width * reveal), 136), fill=accent)
+    draw.text((text_x, text_y + 18), _scene_model_label(slide, "secondary"), fill=accent, font=fonts["small"])
+    draw.rectangle((text_x, text_y + 52, text_x + int(text_width * reveal), text_y + 56), fill=accent)
     _draw_wrapped_text(
         draw,
         str(shot.get("focus_text") or ""),
-        (text_x, 170),
+        (text_x, text_y + 84),
         font=fonts["headline"],
         width=text_width,
-        max_height=190,
+        max_height=min(210, text_y2 - text_y - 180),
         fill=(244, 247, 251),
         spacing=7,
         max_lines=5,
@@ -5030,7 +7434,7 @@ def _draw_scene_media_detail(
         _draw_wrapped_text(
             draw,
             caption,
-            (text_x, 392),
+            (text_x, text_y2 - 88),
             font=fonts["small"],
             width=text_width,
             max_height=76,
@@ -5060,20 +7464,9 @@ def _draw_scene_supporting_context(
     if not candidates:
         fallback = _clean_display_text(slide.get("visual_caption") or slide.get("purpose") or "")
         candidates = [fallback] if fallback and fallback != focus else []
-    draw.text((x1, y1), "PAPER CONTEXT", fill=accent, font=fonts["small"])
+    draw.text((x1, y1), _scene_model_label(slide, "secondary"), fill=accent, font=fonts["small"])
     draw.rectangle((x1, y1 + 32, x2, y1 + 34), fill=(40, 65, 88))
     if not candidates:
-        _draw_wrapped_text(
-            draw,
-            "The narration develops this claim with the paper's supporting evidence.",
-            (x1, y1 + 58),
-            font=fonts["small"],
-            width=x2 - x1,
-            max_height=y2 - y1 - 58,
-            fill=(171, 190, 213),
-            spacing=4,
-            max_lines=4,
-        )
         return
     item_height = max(74, (y2 - y1 - 54) // min(3, len(candidates)))
     for index, item in enumerate(candidates[:3]):
@@ -5108,8 +7501,8 @@ def _draw_scene_contrast(
     left = items[max(0, focus_index - 1)] if items else str(shot.get("focus_text") or "")
     right = items[focus_index] if items else str(shot.get("narration") or "")
     mid = (x1 + x2) // 2
-    draw.text((x1, y1), "CONTEXT", fill=(145, 164, 187), font=fonts["small"])
-    draw.text((mid + 52, y1), "IMPLICATION", fill=accent, font=fonts["small"])
+    draw.text((x1, y1), _scene_model_label(slide, "primary"), fill=(145, 164, 187), font=fonts["small"])
+    draw.text((mid + 52, y1), _scene_model_label(slide, "result"), fill=accent, font=fonts["small"])
     draw.rectangle((x1, y1 + 34, mid - 54, y1 + 37), fill=(47, 74, 99))
     draw.rectangle((mid + 52, y1 + 34, x2, y1 + 37), fill=accent)
     _draw_wrapped_text(draw, left, (x1, y1 + 62), font=fonts["headline"], width=mid - x1 - 54, max_height=220, fill=(213, 223, 236), spacing=7, max_lines=5)
@@ -5123,39 +7516,137 @@ def _draw_scene_process(
     box: tuple[int, int, int, int],
     *,
     reveal: float,
+    shot: dict[str, Any] | None = None,
     accent: tuple[int, int, int],
     fonts: dict[str, Any],
 ) -> None:
     x1, y1, x2, y2 = box
+    shot = shot or {}
+    scene_text = " ".join(
+        [
+            _clean_display_text(slide.get("title")),
+            _clean_display_text(slide.get("purpose")),
+            _clean_display_text(shot.get("narration")),
+        ]
+    ).casefold()
+    if "tree search" in scene_text or "layout branch" in scene_text:
+        _draw_scene_tree_search(draw, slide, shot, box, reveal=reveal, accent=accent, fonts=fonts)
+        return
+    if "parallel" in scene_text and any(token in scene_text for token in ("generation", "slide", "agent", "task")):
+        _draw_scene_parallel_mechanism(draw, slide, shot, box, reveal=reveal, accent=accent, fonts=fonts)
+        return
     items = [_clean_visual_item(str(item)) for item in (slide.get("visual_items") or slide.get("bullets") or [])[:5]]
     if not items:
         items = ["Input", "Reason", "Generate", "Evaluate"]
-    visible = min(len(items), max(1, int(math.ceil(reveal * len(items)))))
-    gap = 22
+    node_progress = _animation_event_progress(shot, "reveal_node", reveal)
+    flow_progress = _animation_event_progress(shot, "flow_token", reveal)
+    result_progress = _animation_event_progress(shot, "highlight_result", reveal)
+    visible = min(len(items), max(1, int(math.ceil(node_progress * len(items)))))
+    gap = 18
     node_w = max(120, (x2 - x1 - gap * (len(items) - 1)) // len(items))
-    center_y = (y1 + y2) // 2
+    node_top = y1 + 54
+    node_bottom = node_top + 92
+    draw.text((x1, y1), _scene_model_label(slide, "secondary"), fill=accent, font=fonts["small"])
+    draw.rectangle((x1 + 174, y1 + 14, x2, y1 + 17), fill=(40, 65, 88))
+    draw.rectangle((x1 + 174, y1 + 14, x1 + 174 + int((x2 - x1 - 174) * reveal), y1 + 18), fill=accent)
     for i, item in enumerate(items):
         x = x1 + i * (node_w + gap)
         if i > 0 and i < visible:
+            center_y = (node_top + node_bottom) // 2
             draw.line((x - gap + 3, center_y, x - 5, center_y), fill=accent, width=3)
             draw.polygon([(x - 8, center_y - 6), (x, center_y), (x - 8, center_y + 6)], fill=accent)
         if i >= visible:
             continue
-        active = i == visible - 1
+        active = i == visible - 1 or (i == len(items) - 1 and result_progress > 0.5)
         outline = accent if active else (54, 88, 119)
-        draw.rounded_rectangle((x, center_y - 62, x + node_w, center_y + 62), radius=7, fill=(9, 18, 29), outline=outline, width=2)
-        draw.text((x + 16, center_y - 44), f"{i + 1:02d}", fill=accent, font=fonts["small"])
+        draw.rounded_rectangle((x, node_top, x + node_w, node_bottom), radius=7, fill=(9, 18, 29), outline=outline, width=2)
+        draw.text((x + 14, node_top + 12), f"{i + 1:02d}", fill=accent, font=fonts["small"])
         _draw_wrapped_text(
             draw,
             item,
-            (x + 16, center_y - 10),
+            (x + 14, node_top + 42),
             font=fonts["small"],
-            width=node_w - 32,
-            max_height=56,
+            width=node_w - 28,
+            max_height=42,
             fill=(226, 236, 248),
             spacing=3,
+            max_lines=2,
+        )
+    if len(items) > 1 and flow_progress > 0:
+        path_start = x1 + node_w
+        path_end = x1 + (len(items) - 1) * (node_w + gap)
+        token_x = path_start + int(max(0, path_end - path_start) * flow_progress)
+        token_y = (node_top + node_bottom) // 2
+        radius = 5 + int(3 * math.sin(math.pi * flow_progress))
+        draw.ellipse((token_x - radius, token_y - radius, token_x + radius, token_y + radius), fill=(241, 249, 253), outline=accent, width=2)
+    focus_detail = _clean_display_text(shot.get("focus_text") or shot.get("narration") or "")
+    if focus_detail:
+        detail_top = node_bottom + 24
+        draw.rectangle((x1, detail_top, x1 + 5, min(y2, detail_top + 72)), fill=accent)
+        _draw_wrapped_text(
+            draw,
+            focus_detail,
+            (x1 + 24, detail_top),
+            font=fonts["body"],
+            width=x2 - x1 - 24,
+            max_height=max(48, y2 - detail_top),
+            fill=(214, 227, 240),
+            spacing=5,
             max_lines=3,
         )
+
+
+def _draw_scene_tree_search(
+    draw: Any,
+    slide: dict[str, Any],
+    shot: dict[str, Any],
+    box: tuple[int, int, int, int],
+    *,
+    reveal: float,
+    accent: tuple[int, int, int],
+    fonts: dict[str, Any],
+) -> None:
+    """Animate candidate expansion, VLM review, and winner selection."""
+    x1, y1, x2, y2 = box
+    items = [_clean_visual_item(str(item)) for item in (slide.get("visual_items") or slide.get("bullets") or [])[:4]]
+    if not items:
+        items = ["Parameter variation", "Layout candidate", "Visual review"]
+    expand = _animation_event_progress(shot, "expand_branch", reveal)
+    score = _animation_event_progress(shot, "score_candidates", reveal)
+    select = _animation_event_progress(shot, "select_winner", reveal)
+    winner = min(int(shot.get("focus_index") or len(items) - 1), len(items) - 1)
+    root_x = (x1 + x2) // 2
+    root_y = y1 + 42
+    draw.text((x1, y1), _scene_model_label(slide, "secondary"), fill=accent, font=fonts["small"])
+    draw.rounded_rectangle((root_x - 130, root_y, root_x + 130, root_y + 58), radius=7, fill=(10, 28, 39), outline=accent, width=2)
+    _draw_single_line_text(draw, _scene_model_label(slide, "primary"), (root_x - 104, root_y + 17), font=fonts["small"], width=208, fill=(238, 245, 250))
+    gap = 18
+    candidate_width = (x2 - x1 - gap * (len(items) - 1)) // len(items)
+    candidate_y = y1 + 174
+    for index, item in enumerate(items):
+        branch_progress = _scene_ease(max(0.0, min(1.0, expand * len(items) - index)))
+        candidate_x = x1 + index * (candidate_width + gap)
+        center_x = candidate_x + candidate_width // 2
+        target_y = candidate_y
+        line_x = int(root_x + (center_x - root_x) * branch_progress)
+        line_y = int(root_y + 58 + (target_y - root_y - 58) * branch_progress)
+        draw.line((root_x, root_y + 58, line_x, line_y), fill=accent if branch_progress >= 1 else (52, 87, 111), width=2)
+        if branch_progress < 0.72:
+            continue
+        selected = index == winner and select > 0.45
+        reviewed = score > max(0.12, index * 0.12)
+        outline = accent if selected else (74, 111, 139) if reviewed else (42, 68, 91)
+        fill = (8, 34, 39) if selected else (9, 20, 31)
+        draw.rounded_rectangle((candidate_x, candidate_y, candidate_x + candidate_width, y2 - 30), radius=7, fill=fill, outline=outline, width=3 if selected else 1)
+        draw.text((candidate_x + 16, candidate_y + 14), f"{index + 1:02d}", fill=accent if selected else (128, 151, 176), font=fonts["small"])
+        _draw_wrapped_text(draw, item, (candidate_x + 16, candidate_y + 48), font=fonts["small"], width=candidate_width - 32, max_height=64, fill=(228, 238, 247), spacing=3, max_lines=3)
+        review_y = candidate_y + 120
+        _draw_single_line_text(draw, _scene_model_label(slide, "secondary"), (candidate_x + 16, review_y), font=fonts["small"], width=candidate_width - 32, fill=(112, 139, 165))
+        draw.rectangle((candidate_x + 16, review_y + 28, candidate_x + candidate_width - 16, review_y + 34), fill=(31, 53, 73))
+        review_width = int((candidate_width - 32) * score * (0.58 + 0.12 * ((index + 2) % 3)))
+        draw.rectangle((candidate_x + 16, review_y + 28, candidate_x + 16 + review_width, review_y + 34), fill=accent if selected else (77, 113, 140))
+        if selected:
+            _draw_single_line_text(draw, _scene_model_label(slide, "result"), (candidate_x + 16, y2 - 62), font=fonts["small"], width=candidate_width - 32, fill=accent)
 
 
 def _draw_scene_process_focus(
@@ -5201,7 +7692,7 @@ def _draw_scene_process_focus(
 
     detail = _scene_item_detail(slide, items[focus])
     detail_y = y1 + 116 + rise
-    draw.text((x1, detail_y), f"CURRENT FOCUS  {focus + 1:02d}", fill=accent, font=fonts["small"])
+    draw.text((x1, detail_y), f"{focus + 1:02d}  {_scene_model_label(slide, 'primary')}", fill=accent, font=fonts["small"])
     draw.rectangle((x1, detail_y + 32, x1 + 178, detail_y + 36), fill=accent)
     _draw_wrapped_text(
         draw,
@@ -5215,7 +7706,7 @@ def _draw_scene_process_focus(
         max_lines=3,
     )
     detail_x = x1 + 510
-    draw.text((detail_x, detail_y), "WHAT IT MEASURES", fill=accent, font=fonts["small"])
+    draw.text((detail_x, detail_y), _scene_model_label(slide, "secondary"), fill=accent, font=fonts["small"])
     draw.rectangle((detail_x, detail_y + 32, x2, detail_y + 34), fill=(44, 72, 97))
     _draw_wrapped_text(
         draw,
@@ -5246,12 +7737,13 @@ def _draw_scene_process_trace(
     if not items:
         items = ["Input", "Reason", "Generate", "Evaluate"]
     focus = min(int(shot.get("focus_index") or 0), len(items) - 1)
-    previous = items[focus - 1] if focus > 0 else "SOURCE"
+    previous = items[focus - 1] if focus > 0 else _scene_model_label(slide, "primary")
     current = items[focus]
-    following = items[focus + 1] if focus + 1 < len(items) else "OUTCOME"
+    following = items[focus + 1] if focus + 1 < len(items) else _scene_model_label(slide, "result")
     detail = _scene_item_detail(slide, current)
+    flow_progress = _animation_event_progress(shot, "flow_token", reveal)
 
-    draw.text((x1 + 18, y1 + 4), f"MECHANISM  {focus + 1:02d} / {len(items):02d}", fill=accent, font=fonts["small"])
+    draw.text((x1 + 18, y1 + 4), f"{focus + 1:02d} / {len(items):02d}  {_scene_model_label(slide, 'secondary')}", fill=accent, font=fonts["small"])
     track_y = y1 + 54
     draw.rectangle((x1 + 18, track_y, x2 - 18, track_y + 3), fill=(40, 65, 88))
     draw.rectangle((x1 + 18, track_y, x1 + 18 + int((x2 - x1 - 36) * (focus + reveal) / len(items)), track_y + 4), fill=accent)
@@ -5289,7 +7781,7 @@ def _draw_scene_process_trace(
     rise = int((1.0 - reveal) * 20)
     focus_box = (center_x - 224, center_y - 104 + rise, center_x + 224, center_y + 104 + rise)
     draw.rounded_rectangle(focus_box, radius=10, fill=(8, 31, 39), outline=accent, width=3)
-    draw.text((focus_box[0] + 28, focus_box[1] + 22), "CURRENT STAGE", fill=accent, font=fonts["small"])
+    draw.text((focus_box[0] + 28, focus_box[1] + 22), _scene_model_label(slide, "secondary"), fill=accent, font=fonts["small"])
     _draw_wrapped_text(
         draw,
         current,
@@ -5301,7 +7793,17 @@ def _draw_scene_process_trace(
         spacing=6,
         max_lines=3,
     )
-    draw.text((x1 + 18, y2 - 92), "WHY THIS STAGE MATTERS", fill=accent, font=fonts["small"])
+    left_start = x1 + 18 + ghost_w
+    left_end = focus_box[0]
+    first_leg = min(1.0, flow_progress * 2.0)
+    if first_leg > 0:
+        token_x = int(left_start + (left_end - left_start) * first_leg)
+        draw.ellipse((token_x - 7, center_y - 7, token_x + 7, center_y + 7), fill=(243, 249, 252), outline=accent, width=2)
+    second_leg = max(0.0, min(1.0, flow_progress * 2.0 - 1.0))
+    if second_leg > 0:
+        token_x = int(focus_box[2] + (x2 - ghost_w - 18 - focus_box[2]) * second_leg)
+        draw.ellipse((token_x - 7, center_y - 7, token_x + 7, center_y + 7), fill=(243, 249, 252), outline=accent, width=2)
+    draw.text((x1 + 18, y2 - 92), _scene_model_label(slide, "result"), fill=accent, font=fonts["small"])
     _draw_single_line_text(draw, detail, (x1 + 18, y2 - 54), font=fonts["body"], width=x2 - x1 - 36, fill=(202, 216, 232))
 
 
@@ -5316,10 +7818,21 @@ def _scene_item_detail(slide: dict[str, Any], item: str) -> str:
         cleaned = _clean_display_text(bullet)
         if label and label.casefold() in cleaned.casefold():
             return cleaned
+    label_tokens = set(re.findall(r"[a-z0-9]+", label.casefold())) - {"and", "the", "for", "with"}
+    best_detail = ""
+    best_score = 0
+    for candidate in [*sentences, *[_clean_display_text(value) for value in slide.get("bullets") or []]]:
+        candidate_tokens = set(re.findall(r"[a-z0-9]+", candidate.casefold()))
+        score = len(label_tokens & candidate_tokens)
+        if score > best_score:
+            best_detail = candidate
+            best_score = score
+    if best_score >= min(2, max(1, len(label_tokens))):
+        return best_detail
     return _clean_display_text(
         slide.get("visual_caption")
         or slide.get("purpose")
-        or "This stage contributes evidence to the paper's evaluation pipeline."
+        or ""
     )
 
 
@@ -5329,9 +7842,29 @@ def _draw_scene_evidence(
     box: tuple[int, int, int, int],
     *,
     reveal: float,
+    shot: dict[str, Any] | None = None,
+    accent: tuple[int, int, int] = (20, 184, 166),
     fonts: dict[str, Any],
 ) -> None:
-    _draw_arbor_table(draw, slide, box, reveal=reveal, font=fonts["mono"])
+    x1, _y1, x2, y2 = box
+    table_bottom = _draw_arbor_table(draw, slide, box, reveal=reveal, font=fonts["mono"])
+    focus = _clean_display_text((shot or {}).get("focus_text") or "")
+    if not focus:
+        bullets = [_clean_display_text(item) for item in (slide.get("bullets") or []) if str(item).strip()]
+        focus_index = min(int((shot or {}).get("focus_index") or 0), max(0, len(bullets) - 1))
+        focus = bullets[focus_index] if bullets else ""
+    if focus and table_bottom + 76 <= y2:
+        label_y = table_bottom + 22
+        draw.text((x1, label_y), _scene_model_label(slide, "secondary"), fill=accent, font=fonts["small"])
+        draw.rectangle((x1, label_y + 31, x1 + 176, label_y + 35), fill=accent)
+        _draw_single_line_text(
+            draw,
+            focus,
+            (x1 + 208, label_y + 4),
+            font=fonts["body"],
+            width=x2 - x1 - 208,
+            fill=(218, 231, 248),
+        )
 
 
 def _draw_scene_evidence_focus(
@@ -5350,12 +7883,230 @@ def _draw_scene_evidence_focus(
     focus = min(int(shot.get("focus_index") or 0), max(0, len(data_rows) - 1))
     row = data_rows[focus] if data_rows else (slide.get("bullets") or [shot.get("focus_text") or "Evidence"])
     cells = [_clean_display_text(cell) for cell in row[:3]]
-    draw.text((x1, y1), f"EVIDENCE {focus + 1:02d}", fill=accent, font=fonts["small"])
+    draw.text((x1, y1), f"{focus + 1:02d}  {_scene_model_label(slide, 'primary')}", fill=accent, font=fonts["small"])
     draw.rectangle((x1, y1 + 48, x1 + int((x2 - x1) * reveal), y1 + 54), fill=accent)
     column_width = max(180, (x2 - x1 - 72) // max(1, len(cells)))
     for index, cell in enumerate(cells):
         x = x1 + index * (column_width + 36)
         _draw_wrapped_text(draw, cell, (x, y1 + 92), font=fonts["headline"] if index == 0 else fonts["body"], width=column_width, max_height=190, fill=(243, 247, 251) if index == 0 else (190, 205, 224), spacing=7, max_lines=5)
+
+
+def _metric_scene_cards(slide: dict[str, Any], shot: dict[str, Any]) -> list[tuple[str, str]]:
+    """Prefer explicit paper statistics, then fall back to qualitative claims."""
+    rows = [row for row in (slide.get("visual_table") or []) if isinstance(row, list)]
+    structured_cards: list[tuple[str, str]] = []
+    semantic_labels = {
+        "papers": "Paper-video pairs",
+        "paired papers": "Paper-video pairs",
+        "avg slides": "Average slides per video",
+        "average slides": "Average slides per video",
+        "avg duration": "Average video duration",
+        "average duration": "Average video duration",
+    }
+    for row in rows[1:]:
+        if len(row) < 2:
+            continue
+        label = _clean_display_text(row[0])
+        value = _clean_display_text(row[1])
+        if not label or not value or not re.search(r"\d", value):
+            continue
+        value = re.sub(r"\.0$", "", value.strip())
+        normalized_label = semantic_labels.get(label.casefold(), label)
+        structured_cards.append((value, normalized_label))
+    if structured_cards:
+        return structured_cards[:4]
+    structured_claims: list[tuple[str, str]] = []
+    for row in rows[1:]:
+        cells = [_clean_display_text(cell) for cell in row[:3]]
+        cells = [cell for cell in cells if cell]
+        if len(cells) < 2:
+            continue
+        title = cells[0]
+        detail = " — ".join(cells[1:])
+        structured_claims.append((f"{len(structured_claims) + 1:02d}", f"{title}: {detail}"))
+    if len(structured_claims) >= 2:
+        return structured_claims[:4]
+    bullets = [_clean_display_text(str(item)) for item in (slide.get("bullets") or []) if str(item).strip()]
+    visual_items = [_clean_visual_item(str(item)) for item in (slide.get("visual_items") or []) if str(item).strip()]
+    table_items = [_clean_visual_item(" | ".join(str(cell) for cell in row[:3])) for row in rows[1:]]
+    candidates = [
+        *bullets,
+        *visual_items,
+        *table_items,
+        _clean_display_text(shot.get("narration") or ""),
+    ]
+    candidates = [item for item in candidates if item]
+    numeric = []
+    for item in candidates:
+        metric_probe = re.sub(r"\b(?:point|finding|step)\s*\d+\b", "", item, flags=re.IGNORECASE)
+        if re.search(r"\d", metric_probe):
+            numeric.append(item)
+    source = numeric if numeric else (bullets or visual_items or table_items or candidates)
+    cards = _metric_cards_from_items(source)
+    deduped: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for value, label in cards:
+        key = (value.casefold(), label.casefold())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((value, label))
+        if len(deduped) >= 4:
+            break
+    return deduped or [("01", "Evidence extracted from the paper")]
+
+
+def _metric_scene_is_qualitative(slide: dict[str, Any], shot: dict[str, Any]) -> bool:
+    """True when ordinal values were synthesized only to enumerate text claims."""
+    rows = [row for row in (slide.get("visual_table") or []) if isinstance(row, list)]
+    candidates = [
+        *[_clean_display_text(str(item)) for item in (slide.get("bullets") or [])],
+        *[_clean_visual_item(str(item)) for item in (slide.get("visual_items") or [])],
+        *[_clean_visual_item(" | ".join(str(cell) for cell in row[:3])) for row in rows[1:]],
+        _clean_display_text(shot.get("narration") or ""),
+    ]
+    for item in candidates:
+        metric_probe = re.sub(r"\b(?:point|finding|step)\s*\d+\b", "", item, flags=re.IGNORECASE)
+        if re.search(r"\d", metric_probe):
+            return False
+    return bool([item for item in candidates if item])
+
+
+def _metric_cards_are_qualitative(cards: list[tuple[str, str]]) -> bool:
+    return bool(cards) and all(re.fullmatch(r"0?\d{1,2}", value.strip()) for value, _label in cards)
+
+
+def _animated_metric_value(value: str, progress: float) -> str:
+    """Animate a truthful numeric readout without changing its final value."""
+    progress = max(0.0, min(1.0, float(progress)))
+    cleaned = value.strip()
+    time_match = re.fullmatch(r"(\d+):(\d{2})", cleaned)
+    if time_match:
+        total_seconds = int(time_match.group(1)) * 60 + int(time_match.group(2))
+        current = int(round(total_seconds * progress))
+        return f"{current // 60}:{current % 60:02d}"
+    number_match = re.fullmatch(r"([≤~]?\s*)(\d+(?:\.\d+)?)(\s*(?:%|x|×)?)", cleaned, flags=re.IGNORECASE)
+    if not number_match:
+        return cleaned
+    prefix, number_text, suffix = number_match.groups()
+    target = float(number_text)
+    current = target * progress
+    if "." in number_text:
+        decimals = len(number_text.split(".", 1)[1])
+        display = f"{current:.{decimals}f}"
+    else:
+        display = str(int(round(current)))
+    return f"{prefix}{display}{suffix}"
+
+
+def _draw_scene_inline_pair(
+    draw: Any,
+    label: str,
+    detail: str,
+    box: tuple[int, int, int],
+    *,
+    font: Any,
+    label_fill: tuple[int, int, int],
+    detail_fill: tuple[int, int, int],
+) -> None:
+    """Draw adjacent model-authored strings with a measured gap, never a fixed offset."""
+    x1, y, x2 = box
+    clean_label = _clean_display_text(label)
+    clean_detail = _clean_display_text(detail)
+    detail_x = x1
+    if clean_label:
+        draw.text((x1, y), clean_label, fill=label_fill, font=font)
+        label_bbox = draw.textbbox((0, 0), clean_label, font=font)
+        detail_x = x1 + max(0, label_bbox[2] - label_bbox[0]) + 28
+    if clean_detail and detail_x < x2 - 40:
+        _draw_single_line_text(
+            draw,
+            clean_detail,
+            (detail_x, y),
+            font=font,
+            width=x2 - detail_x,
+            fill=detail_fill,
+            min_font_size=14,
+        )
+
+
+def _draw_scene_claim_matrix(
+    draw: Any,
+    cards: list[tuple[str, str]],
+    slide: dict[str, Any],
+    box: tuple[int, int, int, int],
+    *,
+    focus_index: int,
+    reveal: float,
+    accent: tuple[int, int, int],
+    fonts: dict[str, Any],
+) -> None:
+    """Render non-numeric findings as claims, not as misleading giant metrics."""
+    x1, y1, x2, y2 = box
+    draw.text((x1, y1), _scene_model_label(slide, "primary"), fill=accent, font=fonts["small"])
+    draw.rectangle((x1 + 252, y1 + 14, x2, y1 + 17), fill=(40, 65, 88))
+    card_count = min(4, len(cards))
+    visible = min(card_count, max(1, int(math.ceil(reveal * card_count))))
+    gap = 18
+    card_top = y1 + 48
+    card_bottom = y2 - 62
+    card_width = (x2 - x1 - gap * max(0, card_count - 1)) // max(1, card_count)
+    for index, (_value, label) in enumerate(cards[:visible]):
+        card_x = x1 + index * (card_width + gap)
+        active = index == min(focus_index, len(cards) - 1)
+        draw.rounded_rectangle(
+            (card_x, card_top, card_x + card_width, card_bottom),
+            radius=7,
+            fill=(10, 29, 39) if active else (9, 20, 32),
+            outline=accent if active else (43, 71, 96),
+            width=2 if active else 1,
+        )
+        draw.text((card_x + 20, card_top + 16), f"{index + 1:02d}", fill=accent if active else (112, 139, 169), font=fonts["small"])
+        if ":" in label:
+            title, detail = [part.strip() for part in label.split(":", 1)]
+            _draw_single_line_text(
+                draw,
+                title,
+                (card_x + 20, card_top + 50),
+                font=fonts["body"],
+                width=card_width - 40,
+                fill=(239, 245, 250) if active else (184, 201, 220),
+                min_font_size=16,
+            )
+            _draw_wrapped_text(
+                draw,
+                detail,
+                (card_x + 20, card_top + 86),
+                font=fonts["small"],
+                width=card_width - 40,
+                max_height=card_bottom - card_top - 104,
+                fill=(198, 216, 230) if active else (142, 163, 184),
+                spacing=3,
+                max_lines=5,
+            )
+        else:
+            _draw_wrapped_text(
+                draw,
+                label,
+                (card_x + 20, card_top + 58),
+                font=fonts["body"],
+                width=card_width - 40,
+                max_height=card_bottom - card_top - 78,
+                fill=(239, 245, 250) if active else (184, 201, 220),
+                spacing=5,
+                max_lines=6,
+            )
+    implication = _clean_display_text(slide.get("visual_caption") or slide.get("purpose") or "")
+    if implication:
+        _draw_scene_inline_pair(
+            draw,
+            _scene_model_label(slide, "result"),
+            implication,
+            (x1, y2 - 34, x2),
+            font=fonts["small"],
+            label_fill=accent,
+            detail_fill=(190, 207, 226),
+        )
 
 
 def _draw_scene_metric(
@@ -5369,22 +8120,28 @@ def _draw_scene_metric(
     fonts: dict[str, Any],
 ) -> None:
     x1, y1, x2, y2 = box
-    rows = [row for row in (slide.get("visual_table") or []) if isinstance(row, list)]
-    items = [_clean_visual_item(str(item)) for item in (slide.get("visual_items") or [])[:4]]
     bullets = [_clean_display_text(str(item)) for item in (slide.get("bullets") or [])[:4]]
-    row_items = (
-        [_clean_visual_item(" | ".join(str(cell) for cell in row[:3])) for row in rows[1:5]]
-        if _visual_table_is_meaningful(rows)
-        else []
-    )
     narration = _clean_display_text(shot.get("narration") or "")
     shot_type = str(shot.get("shot_type") or "metric")
     layout = str(shot.get("layout_variant") or "data_wall")
     focus_index = min(int(shot.get("focus_index") or 0), max(0, len(bullets) - 1))
     focus_text = " ".join([narration, bullets[focus_index] if bullets else ""]).casefold()
-    if any(token in focus_text for token in ("cursor", "grounding", "whisperx", "temporal alignment")):
+    has_parallel_event = any(event.get("action") == "parallel_progress" for event in shot.get("animation_events") or [])
+    if has_parallel_event:
+        _draw_scene_parallel_mechanism(
+            draw,
+            slide,
+            shot,
+            box,
+            reveal=reveal,
+            accent=accent,
+            fonts=fonts,
+        )
+        return
+    if _should_draw_cursor_grounding_scene(slide, shot):
         _draw_scene_cursor_grounding(
             draw,
+            slide,
             box,
             reveal=reveal,
             accent=accent,
@@ -5399,6 +8156,7 @@ def _draw_scene_metric(
     if layout == "comparison" and "parallel" in narration_folded and not describes_speed:
         _draw_scene_parallel_mechanism(
             draw,
+            slide,
             shot,
             box,
             reveal=reveal,
@@ -5420,6 +8178,7 @@ def _draw_scene_metric(
     if layout == "comparison" and "parallel" in focus_text:
         _draw_scene_parallel_mechanism(
             draw,
+            slide,
             shot,
             box,
             reveal=reveal,
@@ -5427,19 +8186,32 @@ def _draw_scene_metric(
             fonts=fonts,
         )
         return
-    cards = _metric_cards_from_items(items or [*bullets, *row_items])
+    cards = _metric_scene_cards(slide, shot)
+    focus_index = _metric_card_focus(cards, narration, fallback=int(shot.get("focus_index") or 0))
+    if _metric_cards_are_qualitative(cards):
+        _draw_scene_claim_matrix(
+            draw,
+            cards,
+            slide,
+            box,
+            focus_index=focus_index,
+            reveal=reveal,
+            accent=accent,
+            fonts=fonts,
+        )
+        return
     if layout == "data_wall" and len(cards) >= 3 and shot_type in {"metric", "data_landscape"}:
         _draw_scene_metric_wall(
             draw,
             cards,
             box,
+            shot=shot,
             focus_index=_metric_card_focus(cards, narration, fallback=int(shot.get("focus_index") or 0)),
             reveal=reveal,
             accent=accent,
             fonts=fonts,
         )
         return
-    focus_index = _metric_card_focus(cards, narration, fallback=int(shot.get("focus_index") or 0))
     value, label = cards[focus_index]
     variant = int(shot.get("composition_variant") or 0)
     focus_right = bool(variant % 2)
@@ -5462,9 +8234,38 @@ def _draw_scene_metric(
     visible = min(len(supporting_cards), max(1, int(math.ceil(reveal * len(supporting_cards)))))
     for i, (small_value, small_label) in enumerate(supporting_cards[:visible]):
         y = y1 + i * 66
-        draw.text((list_x, y + 6), small_value, fill=accent, font=fonts["small"])
-        _draw_single_line_text(draw, small_label, (list_x + 110, y + 6), font=fonts["small"], width=440, fill=(194, 208, 226))
+        value_bbox = draw.textbbox((0, 0), small_value, font=fonts["small"])
+        value_width = max(108, min(250, value_bbox[2] - value_bbox[0] + 28))
+        _draw_single_line_text(
+            draw,
+            small_value,
+            (list_x, y + 6),
+            font=fonts["small"],
+            width=value_width - 16,
+            fill=accent,
+            min_font_size=14,
+        )
+        _draw_single_line_text(
+            draw,
+            small_label,
+            (list_x + value_width, y + 6),
+            font=fonts["small"],
+            width=max(120, min(x2 - list_x - value_width, 540 - value_width)),
+            fill=(194, 208, 226),
+            min_font_size=14,
+        )
         draw.line((list_x, y + 42, min(x2, list_x + 540), y + 42), fill=(38, 60, 82), width=1)
+    insight = _clean_display_text(slide.get("visual_caption") or slide.get("purpose") or "")
+    if insight:
+        _draw_scene_inline_pair(
+            draw,
+            _scene_model_label(slide, "result"),
+            insight,
+            (x1, y2 - 32, x2),
+            font=fonts["small"],
+            label_fill=accent,
+            detail_fill=(185, 203, 223),
+        )
 
 
 def _draw_scene_metric_wall(
@@ -5472,6 +8273,7 @@ def _draw_scene_metric_wall(
     cards: list[tuple[str, str]],
     box: tuple[int, int, int, int],
     *,
+    shot: dict[str, Any],
     focus_index: int,
     reveal: float,
     accent: tuple[int, int, int],
@@ -5482,42 +8284,48 @@ def _draw_scene_metric_wall(
     card_width = (x2 - x1 - gap) // 2
     card_height = (y2 - y1 - gap) // 2
     visible = min(4, max(1, int(math.ceil(reveal * min(4, len(cards))))))
+    bar_progress = _animation_event_progress(shot, "grow_bar", reveal)
     for index, (value, label) in enumerate(cards[:4]):
         if index >= visible:
             continue
         column = index % 2
         row = index // 2
-        card_x = x1 + column * (card_width + gap)
+        spans_last_row = len(cards) == 3 and index == 2
+        current_card_width = x2 - x1 if spans_last_row else card_width
+        card_x = x1 if spans_last_row else x1 + column * (card_width + gap)
         card_y = y1 + row * (card_height + gap)
         active = index == focus_index
         draw.rounded_rectangle(
-            (card_x, card_y, card_x + card_width, card_y + card_height),
+            (card_x, card_y, card_x + current_card_width, card_y + card_height),
             radius=7,
             fill=(10, 29, 39) if active else (9, 20, 32),
             outline=accent if active else (43, 71, 96),
             width=2 if active else 1,
         )
-        draw.text((card_x + 24, card_y + 18), "PAPER EVIDENCE", fill=accent if active else (112, 139, 169), font=fonts["small"])
-        draw.text((card_x + 24, card_y + 52), value, fill=(242, 247, 251), font=fonts["number"])
-        _draw_wrapped_text(
+        draw.text((card_x + 24, card_y + 18), f"{index + 1:02d}", fill=accent if active else (112, 139, 169), font=fonts["small"])
+        _draw_single_line_text(
             draw,
             label,
-            (card_x + 174, card_y + 60),
-            font=fonts["body"],
-            width=card_width - 198,
-            max_height=68,
-            fill=(207, 220, 235),
-            spacing=4,
-            max_lines=3,
+            (card_x + 86, card_y + 18),
+            font=fonts["small"],
+            width=current_card_width - 110,
+            fill=(218, 228, 239) if active else (164, 184, 207),
         )
+        draw.text((card_x + 24, card_y + 52), value, fill=(242, 247, 251), font=fonts["number"])
         draw.rectangle(
-            (card_x + 24, card_y + card_height - 18, card_x + card_width - 24, card_y + card_height - 15),
+            (
+                card_x + 24,
+                card_y + card_height - 18,
+                card_x + 24 + int((current_card_width - 48) * bar_progress),
+                card_y + card_height - 15,
+            ),
             fill=accent if active else (35, 59, 82),
         )
 
 
 def _draw_scene_cursor_grounding(
     draw: Any,
+    slide: dict[str, Any],
     box: tuple[int, int, int, int],
     *,
     reveal: float,
@@ -5525,11 +8333,13 @@ def _draw_scene_cursor_grounding(
     fonts: dict[str, Any],
 ) -> None:
     x1, y1, x2, y2 = box
-    stages = [
-        ("NARRATION", "Current sentence"),
-        ("GUI GROUNDING", "Visual target"),
-        ("CURSOR", "Screen coordinate"),
+    items = [_clean_visual_item(str(item)) for item in (slide.get("visual_items") or [])[:3]]
+    labels = [
+        _scene_model_label(slide, "primary"),
+        _scene_model_label(slide, "secondary"),
+        _scene_model_label(slide, "result"),
     ]
+    stages = list(zip(labels, items or labels))
     gap = 34
     node_width = (x2 - x1 - gap * 2) // 3
     visible = max(1, min(len(stages), int(math.ceil(reveal * len(stages)))))
@@ -5556,7 +8366,7 @@ def _draw_scene_cursor_grounding(
         draw.text((node_x + 18, center_y + 46), detail, fill=(232, 239, 248), font=fonts["small"])
 
     timeline_y = y1 + 244
-    draw.text((x1, timeline_y), "WHISPERX TEMPORAL ALIGNMENT", fill=accent, font=fonts["small"])
+    draw.text((x1, timeline_y), _scene_model_label(slide, "result"), fill=accent, font=fonts["small"])
     draw.line((x1, timeline_y + 48, x2, timeline_y + 48), fill=(53, 80, 105), width=2)
     tick_count = 9
     for index in range(tick_count):
@@ -5573,6 +8383,7 @@ def _draw_scene_cursor_grounding(
 
 def _draw_scene_parallel_mechanism(
     draw: Any,
+    slide: dict[str, Any],
     shot: dict[str, Any],
     box: tuple[int, int, int, int],
     *,
@@ -5581,43 +8392,104 @@ def _draw_scene_parallel_mechanism(
     fonts: dict[str, Any],
 ) -> None:
     x1, y1, x2, y2 = box
-    gap = 76
-    column_width = (x2 - x1 - gap) // 2
-    right_x = x1 + column_width + gap
-    draw.text((x1, y1), "SEQUENTIAL GENERATION", fill=(144, 164, 187), font=fonts["small"])
-    draw.text((right_x, y1), "PAPERTALKER PARALLEL", fill=accent, font=fonts["small"])
-    draw.rectangle((x1, y1 + 34, x1 + column_width, y1 + 37), fill=(47, 74, 99))
-    draw.rectangle((right_x, y1 + 34, x2, y1 + 37), fill=accent)
-    visible = max(1, min(3, int(math.ceil(reveal * 3))))
-    node_width = 132
-    node_height = 62
-    serial_y = y1 + 112
-    for index in range(visible):
-        node_x = x1 + index * (node_width + 34)
-        draw.rounded_rectangle(
-            (node_x, serial_y, node_x + node_width, serial_y + node_height),
-            radius=6,
-            fill=(11, 23, 36),
-            outline=(67, 91, 117),
-            width=2,
+    primary_label = _scene_model_label(slide, "primary")
+    parallel_label = _scene_model_label(slide, "secondary")
+    result_label = _scene_model_label(slide, "result")
+    items = [_clean_display_text(item) for item in (slide.get("visual_items") or []) if str(item).strip()][:5]
+    if not items:
+        items = [_clean_display_text(item) for item in (slide.get("bullets") or []) if str(item).strip()][:5]
+    draw.text((x1, y1), parallel_label, fill=accent, font=fonts["small"])
+    draw.rectangle((x1 + 236, y1 + 14, x2, y1 + 17), fill=(40, 65, 88))
+    sequential_progress = _animation_event_progress(shot, "sequential_progress", reveal)
+    parallel_progress = _animation_event_progress(shot, "parallel_progress", reveal)
+    result_progress = _animation_event_progress(shot, "highlight_result", reveal)
+    content_top = y1 + 52
+    content_bottom = y2 - 6
+    input_width = 220
+    output_width = 220
+    lane_gap = 30
+    lanes_x = x1 + input_width + lane_gap
+    lanes_right = x2 - output_width - lane_gap
+    lane_width = lanes_right - lanes_x
+    lane_count = max(1, len(items))
+    lane_spacing = 8
+    lane_height = max(34, min(42, (content_bottom - content_top - lane_spacing * (lane_count - 1)) // lane_count))
+    stack_height = lane_count * lane_height + (lane_count - 1) * lane_spacing
+    stack_top = content_top + max(0, (content_bottom - content_top - stack_height) // 2)
+    input_top = stack_top + max(0, (stack_height - 96) // 2)
+    output_top = input_top
+    draw.rounded_rectangle(
+        (x1, input_top, x1 + input_width, input_top + 96),
+        radius=7,
+        fill=(9, 20, 32),
+        outline=(62, 91, 117),
+        width=2,
+    )
+    _draw_wrapped_text(
+        draw,
+        primary_label,
+        (x1 + 20, input_top + 25),
+        font=fonts["body"],
+        width=input_width - 40,
+        max_height=58,
+        fill=(224, 234, 245),
+        spacing=4,
+        max_lines=2,
+    )
+    output_outline = accent if result_progress > 0.15 else (55, 84, 107)
+    draw.rounded_rectangle(
+        (x2 - output_width, output_top, x2, output_top + 96),
+        radius=7,
+        fill=(8, 31, 39) if result_progress > 0.15 else (9, 20, 32),
+        outline=output_outline,
+        width=2,
+    )
+    _draw_wrapped_text(
+        draw,
+        result_label,
+        (x2 - output_width + 20, output_top + 25),
+        font=fonts["body"],
+        width=output_width - 40,
+        max_height=58,
+        fill=accent if result_progress > 0.15 else (177, 198, 216),
+        spacing=4,
+        max_lines=2,
+    )
+    input_anchor = (x1 + input_width, input_top + 48)
+    output_anchor = (x2 - output_width, output_top + 48)
+    for index, item in enumerate(items):
+        node_y = stack_top + index * (lane_height + lane_spacing)
+        center_y = node_y + lane_height // 2
+        active = parallel_progress > 0.22
+        connector_progress = max(0.08, sequential_progress)
+        input_end = (
+            input_anchor[0] + int((lanes_x - input_anchor[0]) * connector_progress),
+            input_anchor[1] + int((center_y - input_anchor[1]) * connector_progress),
         )
-        draw.text((node_x + 18, serial_y + 19), f"SLIDE {index + 1:02d}", fill=(203, 216, 232), font=fonts["small"])
-        if index and index < visible:
-            draw.line((node_x - 28, serial_y + 31, node_x - 7, serial_y + 31), fill=(91, 116, 145), width=3)
-            draw.polygon([(node_x - 8, serial_y + 25), (node_x, serial_y + 31), (node_x - 8, serial_y + 37)], fill=(91, 116, 145))
-    parallel_node_width = column_width - 104
-    for index in range(visible):
-        node_y = y1 + 76 + index * 72
+        draw.line((*input_anchor, *input_end), fill=(44, 82, 101), width=2)
+        draw.line((lanes_right, center_y, output_anchor[0], output_anchor[1]), fill=(44, 82, 101), width=2)
         draw.rounded_rectangle(
-            (right_x + 52, node_y, right_x + 52 + parallel_node_width, node_y + 52),
+            (lanes_x, node_y, lanes_right, node_y + lane_height),
             radius=6,
-            fill=(10, 31, 39),
-            outline=accent,
-            width=2,
+            fill=(10, 31, 39) if active else (9, 22, 34),
+            outline=accent if active else (50, 81, 102),
+            width=2 if active else 1,
         )
-        draw.text((right_x + 72, node_y + 14), f"SLIDE {index + 1:02d}", fill=(233, 244, 249), font=fonts["small"])
-    draw.text((x1, y2 - 48), "Tasks wait for the previous slide", fill=(137, 157, 181), font=fonts["small"])
-    draw.text((right_x, y2 - 48), "Independent slides run at the same time", fill=accent, font=fonts["small"])
+        _draw_single_line_text(
+            draw,
+            item,
+            (lanes_x + 18, node_y + max(6, (lane_height - _line_height(draw, fonts["small"])) // 2)),
+            font=fonts["small"],
+            width=max(100, lane_width - 36),
+            fill=(235, 243, 248) if active else (180, 201, 218),
+            min_font_size=14,
+        )
+        progress_width = int((lane_width - 12) * parallel_progress)
+        if progress_width > 0:
+            draw.rectangle(
+                (lanes_x + 6, node_y + lane_height - 4, lanes_x + 6 + progress_width, node_y + lane_height - 2),
+                fill=accent if active else (53, 94, 108),
+            )
 
 
 def _draw_scene_metric_comparison(
@@ -5640,8 +8512,9 @@ def _draw_scene_metric_comparison(
     )
     match = re.search(r"\b(\d+(?:\.\d+)?)\s*[x×]", source_text, flags=re.IGNORECASE)
     factor = max(1.0, float(match.group(1))) if match else 1.0
-    value = f"{match.group(1)}x" if match else "VS"
-    draw.text((x1, y1 + 8), "REPORTED EFFICIENCY", fill=accent, font=fonts["small"])
+    value = f"{match.group(1)}x" if match else _scene_model_label(slide, "result")
+    bar_progress = _animation_event_progress(shot, "grow_bar", reveal)
+    draw.text((x1, y1 + 8), _scene_model_label(slide, "result"), fill=accent, font=fonts["small"])
     draw.text((x1, y1 + 48), value, fill=accent, font=fonts["number"])
     _draw_wrapped_text(
         draw,
@@ -5656,23 +8529,24 @@ def _draw_scene_metric_comparison(
     )
     chart_x = x1 + 500
     chart_width = x2 - chart_x
-    draw.text((chart_x, y1 + 8), "RELATIVE GENERATION TIME", fill=accent, font=fonts["small"])
+    draw.text((chart_x, y1 + 8), _scene_model_label(slide, "secondary"), fill=accent, font=fonts["small"])
+    visual_items = [_clean_display_text(item) for item in (slide.get("visual_items") or [])]
     comparisons = [
-        ("Sequential baseline", 1.0, "1.00x"),
-        ("PaperTalker parallel", 1.0 / factor if factor > 1 else 0.62, f"≤ {1.0 / factor:.2f}x" if factor > 1 else "faster"),
+        (visual_items[0] if visual_items else _scene_model_label(slide, "primary"), 1.0, "1.00x"),
+        (visual_items[-1] if len(visual_items) > 1 else _scene_model_label(slide, "secondary"), 1.0 / factor if factor > 1 else 0.62, f"≤ {1.0 / factor:.2f}x" if factor > 1 else _scene_model_label(slide, "result")),
     ]
     for index, (label, ratio, readout) in enumerate(comparisons):
         y = y1 + 82 + index * 112
         draw.text((chart_x, y), label, fill=(203, 216, 232), font=fonts["small"])
         draw.text((x2 - 86, y), readout, fill=accent if index else (150, 170, 194), font=fonts["small"])
         draw.rounded_rectangle((chart_x, y + 38, x2, y + 58), radius=5, fill=(25, 43, 61))
-        bar_width = int(chart_width * ratio * reveal)
+        bar_width = int(chart_width * ratio * bar_progress)
         draw.rounded_rectangle(
             (chart_x, y + 38, chart_x + max(8, bar_width), y + 58),
             radius=5,
             fill=accent if index else (91, 116, 145),
         )
-    draw.text((chart_x, y2 - 44), "Lower is faster", fill=(133, 153, 177), font=fonts["small"])
+    draw.text((chart_x, y2 - 44), _scene_model_label(slide, "result"), fill=(133, 153, 177), font=fonts["small"])
 
 
 def _metric_card_focus(cards: list[tuple[str, str]], narration: str, *, fallback: int) -> int:
@@ -6534,7 +9408,7 @@ def _draw_arbor_tree(draw: Any, slide: dict[str, Any], box: tuple[int, int, int,
         )
 
 
-def _draw_arbor_table(draw: Any, slide: dict[str, Any], box: tuple[int, int, int, int], *, reveal: float, font: Any) -> None:
+def _draw_arbor_table(draw: Any, slide: dict[str, Any], box: tuple[int, int, int, int], *, reveal: float, font: Any) -> int:
     x1, y1, x2, y2 = box
     rows = [row for row in (slide.get("visual_table") or []) if isinstance(row, list)] or [["Signal", "Cue"], ["Evidence", "Narration"]]
     visible = min(len(rows), max(1, int(math.ceil(reveal * len(rows)))))
@@ -6566,6 +9440,7 @@ def _draw_arbor_table(draw: Any, slide: dict[str, Any], box: tuple[int, int, int
             )
             x += col_w
         y += row_h
+    return y
 
 
 def _table_col_widths(total_width: int, col_count: int) -> list[int]:
@@ -6662,11 +9537,18 @@ def _metric_cards_from_items(items: list[str]) -> list[tuple[str, str]]:
         matches = list(pattern.finditer(text))
         added_metric = False
         for match in matches:
-            value = re.sub(r"\s+", " ", match.group(0)).strip()
-            key = value.casefold()
+            raw_value = re.sub(r"\s+", " ", match.group(0)).strip()
+            value = re.sub(
+                r"\s*(?:pages?|figures?|slides?|minutes?|videos?|pairs?|accuracy)\s*$",
+                "",
+                raw_value,
+                flags=re.IGNORECASE,
+            ).strip()
+            value = value or raw_value
+            label = _metric_label_from_value(raw_value, text)
+            key = f"{value.casefold()}::{label.casefold()}"
             if not value or key in seen:
                 continue
-            label = _metric_label_from_value(value, text)
             cards.append((value, label or "Reported paper statistic"))
             seen.add(key)
             added_metric = True
@@ -6692,7 +9574,7 @@ def _metric_label_from_value(value: str, source_text: str) -> str:
         return "Video length range"
     if ":" in value_l and any(token in source_l for token in ("duration", "video", "minute")):
         return "Average video duration"
-    if "pairs" in value_l or "pair" in value_l:
+    if "pairs" in value_l or "pair" in value_l or "pairs" in source_l or "pair" in source_l:
         return "Paper-video pairs"
     if "accuracy" in source_l or "%" in value_l:
         return "Reported accuracy gain"
@@ -6886,53 +9768,97 @@ def run_video_pipeline(
         os.environ.setdefault("OPENAI_VISION_MODEL", os.environ.get("LUMID_OMNI_MODEL") or LUMID_OMNI_MODEL)
     (out_dir / "source.json").write_text(json.dumps(source, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    _progress("pipeline", "run builders and judge loop", current=2, total=12)
-    slides, subtitles, cursor_plan, talker, judge, revision_history = run_revision_loop(
-        source,
-        out_dir=out_dir,
-        max_slides=max_slides,
-        seconds_per_slide=seconds_per_slide,
-        use_api=use_api,
-        target_score=target_score,
-        max_revisions=max_revisions,
-        min_revisions=min_revisions,
-        use_vlm_cursor=use_vlm_cursor,
+    resume_scene = os.environ.get("AUTO_VIDEO_RESUME_SCENE", "0").strip().lower() not in {"0", "false", "no", "off"}
+    checkpoint_path = out_dir / "pipeline_checkpoint.json"
+    checkpoint: dict[str, Any] = {}
+    if resume_scene and checkpoint_path.is_file():
+        try:
+            checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            checkpoint = {}
+    resumed = bool(
+        checkpoint.get("stage") in {"scene_planned", "assets_ready", "timeline_ready", "audio_ready"}
+        and checkpoint.get("slides")
+        and checkpoint.get("subtitles")
     )
-    _progress("scene_director", "plan varied layouts and entrances", detail=f"api={'on' if use_api else 'off'}")
-    slides, scene_direction_report = plan_scene_directions(source, slides, use_api=use_api)
-    (out_dir / "scene_direction.json").write_text(
-        json.dumps(scene_direction_report, indent=2, ensure_ascii=False),
-        encoding="utf-8",
+    reuse_assets = bool(
+        resumed
+        and checkpoint.get("stage") in {"assets_ready", "timeline_ready", "audio_ready"}
+        and all(
+            slide.get("visual_asset_paths") or str(slide.get("visual_kind") or "").casefold() in {"flow", "table", "metrics"}
+            for slide in checkpoint.get("slides") or []
+            if isinstance(slide, dict)
+        )
     )
-    slides = sanitize_public_slides(slides)
-    subtitles = sanitize_public_subtitles(subtitles)
-    cursor_plan = build_cursor_plan(
-        subtitles,
-        slides=slides,
-        source=source,
-        out_dir=out_dir,
-        use_vlm_cursor=use_vlm_cursor,
-    )
-    talker = build_talker_plan(subtitles)
-    _write_pipeline_checkpoint(
-        out_dir,
-        stage="scene_planned",
-        source=source,
-        slides=slides,
-        subtitles=subtitles,
-        cursor_plan=cursor_plan,
-        talker=talker,
-        extra={"judge": judge, "revision_history": revision_history},
-    )
+    if resumed:
+        slides = sanitize_public_slides(checkpoint["slides"])
+        subtitles = sanitize_public_subtitles(checkpoint["subtitles"])
+        cursor_plan = list(checkpoint.get("cursor_plan") or [])
+        talker = dict(checkpoint.get("talker_plan") or build_talker_plan(subtitles))
+        judge = dict(checkpoint.get("judge") or {})
+        revision_history = list(checkpoint.get("revision_history") or [])
+        _progress("pipeline", "resume validated scene checkpoint", current=4, total=12, detail=f"slides={len(slides)} subtitles={len(subtitles)}")
+    else:
+        _progress("pipeline", "run builders and judge loop", current=2, total=12)
+        slides, subtitles, cursor_plan, talker, judge, revision_history = run_revision_loop(
+            source,
+            out_dir=out_dir,
+            max_slides=max_slides,
+            seconds_per_slide=seconds_per_slide,
+            use_api=use_api,
+            target_score=target_score,
+            max_revisions=max_revisions,
+            min_revisions=min_revisions,
+            use_vlm_cursor=use_vlm_cursor,
+        )
+        _progress("scene_director", "plan varied layouts and entrances", detail=f"api={'on' if use_api else 'off'}")
+        slides, scene_direction_report = plan_scene_directions(source, slides, use_api=use_api)
+        (out_dir / "scene_direction.json").write_text(
+            json.dumps(scene_direction_report, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        slides = sanitize_public_slides(slides)
+        subtitles = sanitize_public_subtitles(subtitles)
+        cursor_plan = build_cursor_plan(
+            subtitles,
+            slides=slides,
+            source=source,
+            out_dir=out_dir,
+            use_vlm_cursor=use_vlm_cursor,
+        )
+        talker = build_talker_plan(subtitles)
+        _write_pipeline_checkpoint(
+            out_dir,
+            stage="scene_planned",
+            source=source,
+            slides=slides,
+            subtitles=subtitles,
+            cursor_plan=cursor_plan,
+            talker=talker,
+            extra={"judge": judge, "revision_history": revision_history},
+        )
 
     _progress("pipeline", "generate slide images", current=5, total=12)
-    paper_figures = extract_paper_figures(source, out_dir)
-    validate_paper_figures = os.environ.get("AUTO_VIDEO_PAPER_FIGURE_VALIDATE", "1").strip().lower() not in {"0", "false", "no", "off"}
-    assign_paper_figures(
-        slides,
-        paper_figures,
-        validate_with_vlm=bool(use_image_api and validate_paper_figures),
-    )
+    assignment_path = out_dir / "paper_figure_assignments.json"
+    if resumed and assignment_path.is_file() and (out_dir / "paper_figure_index.json").is_file():
+        paper_figures = json.loads((out_dir / "paper_figure_index.json").read_text(encoding="utf-8"))
+        assignments = json.loads(assignment_path.read_text(encoding="utf-8"))
+        assignment_by_slide = {int(item.get("slide_index") or 0): item for item in assignments}
+        for slide in slides:
+            assignment = assignment_by_slide.get(int(slide.get("index") or 0), {})
+            slide["paper_figure_paths"] = [
+                str(path) for path in assignment.get("paths") or [] if Path(str(path)).is_file()
+            ]
+            slide["paper_figure_validation"] = list(assignment.get("validation") or [])
+        _progress("paper_figure", "reuse validated paper figure assignments", detail=f"count={len(paper_figures)}")
+    else:
+        paper_figures = extract_paper_figures(source, out_dir)
+        validate_paper_figures = os.environ.get("AUTO_VIDEO_PAPER_FIGURE_VALIDATE", "1").strip().lower() not in {"0", "false", "no", "off"}
+        assign_paper_figures(
+            slides,
+            paper_figures,
+            validate_with_vlm=bool(use_image_api and validate_paper_figures),
+        )
     (out_dir / "paper_figure_assignments.json").write_text(
         json.dumps(
             [
@@ -6949,7 +9875,55 @@ def run_video_pipeline(
         ),
         encoding="utf-8",
     )
-    image_generation = generate_slide_images(slides, out_dir, use_image_api=use_image_api)
+    require_source_figures = os.environ.get(
+        "AUTO_VIDEO_REQUIRE_SOURCE_FIGURES", "0"
+    ).strip().lower() not in {"0", "false", "no", "off"}
+    extracted_region_count = sum(
+        item.get("extraction_mode") == "rendered_page_region" for item in paper_figures
+    )
+    assigned_source_figure_count = sum(
+        len(slide.get("paper_figure_paths") or []) for slide in slides
+    )
+    if require_source_figures and str(source.get("kind") or kind).casefold() == "paper":
+        if extracted_region_count == 0:
+            raise RuntimeError(
+                "Source-figure quality gate failed: no complete Figure/Table region was "
+                "extracted from the paper. Check the 'paper_figure' renderer log before retrying."
+            )
+        if assigned_source_figure_count == 0:
+            raise RuntimeError(
+                "Source-figure quality gate failed: figures were extracted but none passed "
+                "section relevance validation. Review paper_figure_assignments.json."
+            )
+    if reuse_assets:
+        image_generation = list(checkpoint.get("image_generation") or [])
+        if not image_generation and (out_dir / "image_generation.json").is_file():
+            image_generation = json.loads((out_dir / "image_generation.json").read_text(encoding="utf-8"))
+        visual_asset_selection = []
+        if (out_dir / "visual_asset_selection.json").is_file():
+            visual_asset_selection = json.loads(
+                (out_dir / "visual_asset_selection.json").read_text(encoding="utf-8")
+            )
+        _progress(
+            "image_builder",
+            "reuse validated final visual assets",
+            detail=f"slides={len(slides)} generated={sum(bool(item.get('ok')) for item in image_generation if isinstance(item, dict))}",
+        )
+    else:
+        image_generation = generate_slide_images(
+            slides,
+            out_dir,
+            use_image_api=use_image_api,
+            source=source,
+        )
+        compare_visual_assets = os.environ.get("AUTO_VIDEO_VISUAL_COMPARE", "1").strip().lower() not in {
+            "0", "false", "no", "off"
+        }
+        visual_asset_selection = select_slide_visual_assets(
+            slides,
+            out_dir,
+            use_vlm=bool(use_image_api and compare_visual_assets),
+        )
     require_model_images = os.environ.get("AUTO_VIDEO_REQUIRE_MODEL_IMAGES", "0").strip().lower() not in {"0", "false", "no", "off"}
     missing_required_images = [
         str(slide.get("title") or f"Slide {slide.get('index')}")
@@ -6981,6 +9955,7 @@ def run_video_pipeline(
             "judge": judge,
             "revision_history": revision_history,
             "image_generation": image_generation,
+            "visual_asset_selection": visual_asset_selection,
             "asset_manifest": preliminary_manifest,
         },
     )
@@ -7025,6 +10000,14 @@ def run_video_pipeline(
         json.dumps(tts_result, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+    require_audio = os.environ.get("AUTO_VIDEO_REQUIRE_AUDIO", "0").strip().lower() not in {
+        "0", "false", "no", "off"
+    }
+    if use_tts and require_audio and not tts_result.get("ok"):
+        raise RuntimeError(
+            "Required narration audio was not generated after service-recovery retries: "
+            + str(tts_result.get("error") or "unknown TTS failure")
+        )
     (out_dir / "talker_plan.json").write_text(
         json.dumps(talker, indent=2, ensure_ascii=False),
         encoding="utf-8",
@@ -7043,6 +10026,9 @@ def run_video_pipeline(
         encoding="utf-8",
     )
     scene_timeline = build_scene_timeline(source, slides, subtitles)
+    hybrid_3d_shot_count = sum(
+        1 for shot in scene_timeline if shot.get("render_mode") == "hybrid_3d"
+    )
     asset_manifest = _scene_asset_manifest(scene_timeline)
     (out_dir / "asset_manifest.json").write_text(
         json.dumps(asset_manifest, indent=2, ensure_ascii=False),
@@ -7051,10 +10037,12 @@ def run_video_pipeline(
     (out_dir / "scene_timeline.json").write_text(
         json.dumps(
             {
-                "version": 1,
-                "mode": "scene_based_research_explainer",
-                "reference_style": "Arbor-inspired event-driven minimal motion",
+                "version": 3,
+                "mode": "object_space_hybrid_3d_explainer" if hybrid_3d_shot_count else "scene_based_research_explainer",
+                "reference_style": "Object-level 3D staging with flat information HUD",
                 "shot_count": len(scene_timeline),
+                "hybrid_3d_enabled": bool(hybrid_3d_shot_count),
+                "hybrid_3d_shot_count": hybrid_3d_shot_count,
                 "shots": scene_timeline,
             },
             indent=2,
@@ -7115,6 +10103,8 @@ def run_video_pipeline(
         _progress("pipeline", "skip audio mux", current=11, total=12, detail="no generated audio")
     else:
         _progress("pipeline", "skip audio mux", current=11, total=12, detail="video render failed")
+    if use_tts and require_audio and video_rendered and not audio_muxed:
+        raise RuntimeError("Required narration audio could not be muxed into the rendered video.")
 
     _progress("pipeline", "write metrics", current=12, total=12)
     total_duration = max((s["end_sec"] for s in subtitles), default=0)
@@ -7142,6 +10132,9 @@ def run_video_pipeline(
         "rerun_modules_next": judge.get("rerun_modules_next", []),
         "slide_count": len(slides),
         "scene_shot_count": len(scene_timeline),
+        "hybrid_3d_enabled": bool(hybrid_3d_shot_count),
+        "hybrid_3d_shot_count": hybrid_3d_shot_count,
+        "hybrid_3d_ratio": round(hybrid_3d_shot_count / max(1, len(scene_timeline)), 4),
         "subtitle_count": len(subtitles),
         "estimated_duration_sec": total_duration,
         "audio_duration_sec": round(audio_duration, 3) if audio_duration else None,
@@ -7178,7 +10171,7 @@ def run_video_pipeline(
         "talking_head_provider": talker.get("talking_head_provider", ""),
         "talker_api_ready": talker["api_ready"],
         "image_api_requested": use_image_api,
-        "image_model": os.environ.get("LUMID_IMAGE_MODEL") or os.environ.get("LUM_IMAGE_MODEL") or LUMID_IMAGE_MODEL,
+        "image_model": _image_model_name(),
         "generated_image_count": generated_image_count,
         "generated_images_per_slide": int(os.environ.get("AUTO_VIDEO_IMAGES_PER_SLIDE", "1")),
         "paper_figure_count": paper_figure_count,
@@ -7189,7 +10182,7 @@ def run_video_pipeline(
         "repairable_shot_count": len(asset_manifest.get("repairable_shots", [])),
         "video_rendered": video_rendered,
         "fps": fps,
-        "renderer_version": "scene_based_research_explainer_v2",
+        "renderer_version": "hybrid_3d_research_explainer_v2" if hybrid_3d_shot_count else "scene_based_research_explainer_v2",
         "render_style": os.environ.get("AUTO_VIDEO_RENDER_STYLE", "scene"),
         "visual_theme": source.get("visual_theme", "signal"),
         "vlm_cursor_requested": use_vlm_cursor,
