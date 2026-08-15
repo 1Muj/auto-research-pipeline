@@ -5769,6 +5769,38 @@ def _render_scene_mp4_video(
         ),
         encoding="utf-8",
     )
+    # Keep the existing Pillow renderer as the default, but optionally emit a
+    # semantic Blender-MCP handoff beside the normal render.  This is an
+    # export-only sidecar: it never changes the current video path, so the
+    # checkpointed pipeline remains reversible while Blender shots are tested
+    # part by part.
+    if os.environ.get("AUTO_VIDEO_EXPORT_BLENDER_OPERATOR", "0").strip().lower() in {"1", "true", "yes", "on"}:
+        try:
+            from .blender_operator import export_operator_manifest
+
+            audio_candidates = [out.parent / "audio.wav", out.parent / "audio.mp3"]
+            audio_path = next((str(path) for path in audio_candidates if path.is_file()), "")
+            manifest_path = export_operator_manifest(
+                source=source,
+                slides=slides,
+                subtitles=subtitles,
+                timeline=timeline,
+                out_dir=out.parent / "blender_operator",
+                audio_path=audio_path,
+                start_sec=float(os.environ.get("AUTO_VIDEO_OPERATOR_START_SEC", "0")),
+                duration_sec=(
+                    float(os.environ["AUTO_VIDEO_OPERATOR_DURATION_SEC"])
+                    if os.environ.get("AUTO_VIDEO_OPERATOR_DURATION_SEC")
+                    else None
+                ),
+                max_shots=max(1, int(os.environ.get("AUTO_VIDEO_OPERATOR_MAX_SHOTS", "3"))),
+                fps=max(1, int(os.environ.get("AUTO_VIDEO_OPERATOR_FPS", str(fps)))),
+                width=width,
+                height=height,
+            )
+            _progress("blender_operator", "manifest exported", detail=str(manifest_path))
+        except (OSError, TypeError, ValueError) as exc:
+            _progress("blender_operator", "manifest export failed", detail=str(exc))
     if not timeline:
         return False
 
