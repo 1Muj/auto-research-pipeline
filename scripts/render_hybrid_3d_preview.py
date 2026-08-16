@@ -29,6 +29,12 @@ def main() -> int:
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--out", type=Path, default=None)
+    parser.add_argument(
+        "--mode",
+        choices=("clear_2d", "hybrid_3d"),
+        default="clear_2d",
+        help="Use clear 2D scene rendering by default; opt into the experimental 3D path explicitly.",
+    )
     args = parser.parse_args()
 
     run_dir = args.run_dir.resolve()
@@ -45,12 +51,14 @@ def main() -> int:
     if not slides or not subtitles:
         parser.error("storyboard has no slides or subtitles")
 
-    output = args.out or run_dir / "hybrid_3d_preview" / "preview.mp4"
+    output_dir_name = "hybrid_3d_preview" if args.mode == "hybrid_3d" else "clear_2d_preview"
+    output = args.out or run_dir / output_dir_name / "preview.mp4"
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
 
     os.environ["AUTO_VIDEO_RENDER_STYLE"] = "scene"
-    os.environ["AUTO_VIDEO_HYBRID_3D"] = "1"
+    os.environ["AUTO_VIDEO_HYBRID_3D"] = "1" if args.mode == "hybrid_3d" else "0"
+    os.environ["AUTO_VIDEO_EXPERIMENTAL_3D"] = "1" if args.mode == "hybrid_3d" else "0"
     os.environ.setdefault("AUTO_VIDEO_HYBRID_3D_RATIO", "0.30")
     os.environ["AUTO_VIDEO_PREVIEW_START_SEC"] = str(max(0.0, args.start))
     os.environ["AUTO_VIDEO_PREVIEW_DURATION_SEC"] = str(max(0.25, args.duration))

@@ -33,3 +33,18 @@ AUTO_VIDEO_OPERATOR_MAX_SHOTS=3 \
 
 这一步只增加 `OUT/blender_operator/blender_operator_manifest.json`，不会替换现有 Pillow/FFmpeg 输出。确认各分段稳定后，再把 Blender 分段视频接入音频 mux 和 DirectorBench 评分。
 
+## 当前交付策略
+
+当前主视频默认使用清晰的 2D scene renderer。原因是实验中的空间卡片在小预览或远景构图下会缩小正文、遮挡论文图，并降低文字和图片的可读性。主流程会要求同时设置以下两个变量才启用 3D：
+
+```bash
+AUTO_VIDEO_HYBRID_3D=1 AUTO_VIDEO_EXPERIMENTAL_3D=1
+```
+
+只设置 `AUTO_VIDEO_HYBRID_3D=1` 不会改变交付视频。需要预览时可运行：
+
+```bash
+./.venv/bin/python scripts/render_hybrid_3d_preview.py \
+  /tmp/auto_video_runs/paper2video_fullqa_v5_20260813 \
+  --mode clear_2d --start 0 --duration 18 --fps 15 --width 1280 --height 720
+```

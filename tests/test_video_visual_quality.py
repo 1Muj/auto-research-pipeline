@@ -1010,6 +1010,7 @@ def test_hybrid_3d_plan_selects_a_restrained_spread_of_spatial_shots(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AUTO_VIDEO_HYBRID_3D", "1")
+    monkeypatch.setenv("AUTO_VIDEO_EXPERIMENTAL_3D", "1")
     monkeypatch.setenv("AUTO_VIDEO_HYBRID_3D_RATIO", "0.30")
     slides = [
         {
@@ -1041,6 +1042,17 @@ def test_hybrid_3d_plan_selects_a_restrained_spread_of_spatial_shots(
     assert all(shot["shot_type"] != "title_card" for shot in spatial)
     assert all(shot["spatial_stage"]["hud_is_flat"] for shot in spatial)
     assert all("narration" in shot["hud_layers"] for shot in spatial)
+
+
+def test_hybrid_3d_requires_explicit_experimental_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AUTO_VIDEO_HYBRID_3D", "1")
+    monkeypatch.delenv("AUTO_VIDEO_EXPERIMENTAL_3D", raising=False)
+    slides = [{"index": 1, "title": "Section", "purpose": "Explain.", "bullets": ["Input"]}]
+    subtitles = [{"slide_index": 1, "start_sec": 0, "end_sec": 5, "text": "Explain the input."}]
+    timeline = build_scene_timeline({"title": "Gate"}, slides, subtitles)
+    assert all(shot["render_mode"] == "slide_2d" for shot in timeline)
 
 
 def test_hybrid_3d_camera_is_bounded_smooth_and_keeps_content_visible() -> None:

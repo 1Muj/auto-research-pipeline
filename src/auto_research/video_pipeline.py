@@ -2848,7 +2848,10 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 
 def _hybrid_3d_enabled() -> bool:
-    return _env_flag("AUTO_VIDEO_HYBRID_3D")
+    # Spatial staging is experimental.  It must be explicitly opted into in
+    # addition to the historical flag so an inherited shell environment cannot
+    # accidentally turn a clear delivery render into the unreadable 3D path.
+    return _env_flag("AUTO_VIDEO_HYBRID_3D") and _env_flag("AUTO_VIDEO_EXPERIMENTAL_3D")
 
 
 def _apply_hybrid_3d_timeline_plan(timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
